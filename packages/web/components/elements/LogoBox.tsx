@@ -1,4 +1,4 @@
-import { LIBRARY_LEFT_MENU_WIDTH } from '../templates/homeFeed/LibraryFilterMenu'
+import { LIBRARY_LEFT_MENU_WIDTH } from '../templates/navMenu/LibraryMenu'
 import { theme } from '../tokens/stitches.config'
 import { OmnivoreFullLogo } from './images/OmnivoreFullLogo'
 import { OmnivoreNameLogo } from './images/OmnivoreNameLogo'
@@ -28,8 +28,12 @@ export function LogoBox(): JSX.Element {
         css={{
           ml: '15px',
           mr: '15px',
-          '@md': {
-            display: 'none',
+
+          display: 'none',
+
+          lineHeight: '1',
+          '@mdDown': {
+            display: 'flex',
           },
         }}
       >

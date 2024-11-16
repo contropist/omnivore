@@ -1,11 +1,13 @@
 import Models
 import Services
 import SwiftUI
+import Utils
 import Views
 
+@MainActor
 struct ApplyLabelsView: View {
   enum Mode {
-    case item(LinkedItem)
+    case item(Models.LibraryItem)
     case highlight(Highlight)
     case list([LinkedItemLabel])
 
@@ -29,12 +31,12 @@ struct ApplyLabelsView: View {
   }
 
   let mode: Mode
-  let isSearchFocused: Bool
   let onSave: (([LinkedItemLabel]) -> Void)?
 
   @EnvironmentObject var dataService: DataService
   @Environment(\.presentationMode) private var presentationMode
   @StateObject var viewModel = LabelsViewModel()
+  @State var isLabelsEntryFocused = false
 
   enum ViewState {
     case mainView
@@ -49,66 +51,70 @@ struct ApplyLabelsView: View {
 
   var innerBody: some View {
     VStack {
-      SearchBar(searchTerm: $viewModel.labelSearchFilter)
-        .padding(.vertical, 8)
-        .padding(.horizontal, 16)
+      LabelsEntryView(
+        searchTerm: $viewModel.labelSearchFilter,
+        isFocused: $isLabelsEntryFocused,
+        viewModel: viewModel
+      )
+      .padding(.horizontal, 10)
+      .padding(.vertical, 20)
+
+      if viewModel.labelSearchFilter.count >= 63 {
+        Text("The maximum length of a label is 64 chars.").foregroundColor(Color.red).font(.footnote)
+      }
 
       List {
-        Section {
-          ForEach(viewModel.labels.applySearchFilter(viewModel.labelSearchFilter), id: \.self) { label in
-            Button(
-              action: {
-                if isSelected(label) {
-                  viewModel.selectedLabels.remove(label)
-                } else {
-                  viewModel.selectedLabels.insert(label)
+        ForEach(viewModel.labels.applySearchFilter(viewModel.labelSearchFilter), id: \.self) { label in
+          Button(
+            action: {
+              if isSelected(label) {
+                if let idx = viewModel.selectedLabels.firstIndex(of: label) {
+                  viewModel.selectedLabels.remove(at: idx)
                 }
-              },
-              label: {
-                HStack {
-                  TextChip(feedItemLabel: label).allowsHitTesting(false)
-                  Spacer()
-                  if isSelected(label) {
-                    Image(systemName: "checkmark")
-                  }
-                }
-                .contentShape(Rectangle())
+              } else {
+                viewModel.labelSearchFilter = ZWSP
+                viewModel.selectedLabels.append(label)
               }
-            )
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            #if os(macOS)
-              .buttonStyle(PlainButtonStyle())
-            #endif
-          }
+            },
+            label: {
+              HStack {
+                TextChip(feedItemLabel: label).allowsHitTesting(false)
+                Spacer()
+                if isSelected(label) {
+                  Image(systemName: "checkmark")
+                }
+              }
+              .contentShape(Rectangle())
+            }
+          )
+          .padding(.vertical, 5)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          #if os(macOS)
+            .buttonStyle(PlainButtonStyle())
+          #endif
+        }
+        if !viewModel.labelSearchFilter.isEmpty, viewModel.labelSearchFilter != ZWSP {
           createLabelButton
         }
       }
-      .listStyle(PlainListStyle())
-
-      Spacer()
+      .listStyle(.plain)
+      .background(Color.extensionBackground)
+      .frame(maxHeight: .infinity)
     }
     .navigationTitle(mode.navTitle)
-    #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
-          cancelButton
-        }
-        ToolbarItem(placement: .navigationBarTrailing) {
-          saveItemChangesButton
-        }
-      }
-    #else
-      .toolbar {
-        ToolbarItemGroup {
-          cancelButton
-          saveItemChangesButton
-        }
-      }
-    #endif
+    .background(Color.extensionBackground)
     .sheet(isPresented: $viewModel.showCreateLabelModal) {
       CreateLabelView(viewModel: viewModel, newLabelName: viewModel.labelSearchFilter)
+    }
+    .task {
+      switch mode {
+      case let .item(feedItem):
+        await viewModel.loadLabels(dataService: dataService, item: feedItem)
+      case let .highlight(highlight):
+        await viewModel.loadLabels(dataService: dataService, highlight: highlight)
+      case let .list(labels):
+        await viewModel.loadLabels(dataService: dataService, initiallySelectedLabels: labels)
+      }
     }
   }
 
@@ -117,10 +123,11 @@ struct ApplyLabelsView: View {
       action: { viewModel.showCreateLabelModal = true },
       label: {
         HStack {
-          Image(systemName: "tag").foregroundColor(.blue)
+          let trimmedLabelName = viewModel.labelSearchFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+          Image.addLink.foregroundColor(.blue).foregroundColor(.blue)
           Text(
             viewModel.labelSearchFilter.count > 0 ?
-              "Create: \"\(viewModel.labelSearchFilter)\" label" :
+              "Create: \"\(trimmedLabelName)\" label" :
               LocalText.createLabelMessage
           ).foregroundColor(.blue)
             .font(Font.system(size: 14))
@@ -162,37 +169,47 @@ struct ApplyLabelsView: View {
   }
 
   var body: some View {
-    Group {
-      #if os(iOS)
-        NavigationView {
-          if viewModel.isLoading {
-            EmptyView()
-          } else {
-            innerBody
+    #if os(iOS)
+      NavigationView {
+        innerBody
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+              cancelButton
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+              saveItemChangesButton
+            }
+          }
+      }
+    #elseif os(macOS)
+      innerBody
+        .toolbar {
+          ToolbarItemGroup {
+            cancelButton
+            saveItemChangesButton
           }
         }
-      #elseif os(macOS)
-        innerBody
-          .frame(minWidth: 400, minHeight: 400)
-      #endif
-    }
-    .task {
-      switch mode {
-      case let .item(feedItem):
-        await viewModel.loadLabels(dataService: dataService, item: feedItem)
-      case let .highlight(highlight):
-        await viewModel.loadLabels(dataService: dataService, highlight: highlight)
-      case let .list(labels):
-        await viewModel.loadLabels(dataService: dataService, initiallySelectedLabels: labels)
-      }
-    }
+        .frame(minWidth: 400, minHeight: 600)
+    #endif
   }
+}
+
+func isSystemLabel(_ label: LinkedItemLabel) -> Bool {
+  label.name == "RSS" || label.name == "Newsletter" || label.name == "Pinned"
 }
 
 extension Sequence where Element == LinkedItemLabel {
   func applySearchFilter(_ searchFilter: String) -> [LinkedItemLabel] {
-    if searchFilter.isEmpty {
+    let hideSystemLabels = PublicValet.hideLabels
+
+    if searchFilter.isEmpty || searchFilter == ZWSP {
       return map { $0 } // return the identity of the sequence
+    }
+    if searchFilter.starts(with: ZWSP) {
+      let index = searchFilter.index(searchFilter.startIndex, offsetBy: 1)
+      let trimmed = searchFilter.suffix(from: index).lowercased()
+      return filter { ($0.name ?? "").lowercased().contains(trimmed) && (!hideSystemLabels || !isSystemLabel($0)) }
     }
     return filter { ($0.name ?? "").lowercased().contains(searchFilter.lowercased()) }
   }

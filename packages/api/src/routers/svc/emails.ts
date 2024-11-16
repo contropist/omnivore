@@ -1,27 +1,21 @@
+import cors from 'cors'
 import express from 'express'
-import {
-  createPubSubClient,
-  readPushSubscription,
-} from '../../datalayer/pubsub'
-import { sendEmail } from '../../utils/sendEmail'
-import { analytics } from '../../utils/analytics'
-import { getNewsletterEmail } from '../../services/newsletters'
 import { env } from '../../env'
+import { readPushSubscription } from '../../pubsub'
+import { findNewsletterEmailByAddress } from '../../services/newsletters'
+import { saveReceivedEmail } from '../../services/received_emails'
+import { saveNewsletter } from '../../services/save_newsletter_email'
+import { analytics } from '../../utils/analytics'
+import { getClaimsByToken } from '../../utils/auth'
+import { corsConfig } from '../../utils/corsConfig'
+import { logger } from '../../utils/logger'
 import {
   generateUniqueUrl,
   getTitleFromEmailSubject,
   isProbablyArticle,
   parseEmailAddress,
 } from '../../utils/parser'
-import { saveEmail } from '../../services/save_email'
-import { buildLogger } from '../../utils/logger'
-import {
-  saveReceivedEmail,
-  updateReceivedEmail,
-} from '../../services/received_emails'
-import cors from 'cors'
-import { corsConfig } from '../../utils/corsConfig'
-import { getClaimsByToken } from '../../utils/auth'
+import { sendEmail } from '../../utils/sendEmail'
 
 interface EmailMessage {
   from: string
@@ -33,13 +27,12 @@ interface EmailMessage {
   text: string
   forwardedFrom?: string
   receivedEmailId: string
+  replyTo?: string
 }
 
 function isEmailMessage(data: any): data is EmailMessage {
   return 'from' in data && 'to' in data
 }
-
-const logger = buildLogger('app.dispatch')
 
 export function emailsServiceRouter() {
   const router = express.Router()
@@ -65,12 +58,12 @@ export function emailsServiceRouter() {
       const data = JSON.parse(message) as unknown
       if (!isEmailMessage(data)) {
         logger.error('Invalid message')
-        res.status(400).send('Bad Request')
+        res.status(200).send('Bad Request')
         return
       }
 
       // get user from newsletter email
-      const newsletterEmail = await getNewsletterEmail(data.to)
+      const newsletterEmail = await findNewsletterEmailByAddress(data.to)
 
       if (!newsletterEmail) {
         logger.info('newsletter email not found', { email: data.to })
@@ -78,7 +71,6 @@ export function emailsServiceRouter() {
         return
       }
       const user = newsletterEmail.user
-      const ctx = { pubsub: createPubSubClient(), uid: user.id }
       const parsedFrom = parseEmailAddress(data.from)
 
       if (
@@ -88,22 +80,28 @@ export function emailsServiceRouter() {
         )
       ) {
         logger.info('handling as article')
-        await saveEmail(ctx, {
-          title: getTitleFromEmailSubject(data.subject),
-          author: parsedFrom.name,
-          url: generateUniqueUrl(),
-          originalContent: data.html || data.text,
-        })
-
-        // update received email type
-        await updateReceivedEmail(data.receivedEmailId, 'article')
+        const savedNewsletter = await saveNewsletter(
+          {
+            title: getTitleFromEmailSubject(data.subject),
+            author: parsedFrom.name || data.from,
+            url: generateUniqueUrl(),
+            content: data.html || data.text,
+            receivedEmailId: data.receivedEmailId,
+            email: newsletterEmail.address,
+          },
+          newsletterEmail
+        )
+        if (!savedNewsletter) {
+          logger.info('Failed to save email')
+          return res.status(500).send('Failed to save email')
+        }
 
         res.status(200).send('Article')
         return
       }
 
-      analytics.track({
-        userId: user.id,
+      analytics.capture({
+        distinctId: user.id,
         event: 'non_newsletter_email_received',
         properties: {
           env: env.server.apiEnv,
@@ -153,7 +151,7 @@ export function emailsServiceRouter() {
 
     try {
       // get user from newsletter email
-      const newsletterEmail = await getNewsletterEmail(req.body.to)
+      const newsletterEmail = await findNewsletterEmailByAddress(req.body.to)
 
       if (!newsletterEmail) {
         logger.info('newsletter email not found', { email: req.body.to })
@@ -168,11 +166,13 @@ export function emailsServiceRouter() {
         req.body.subject,
         req.body.text,
         req.body.html,
-        user.id
+        user.id,
+        'non-article',
+        req.body.replyTo
       )
 
-      analytics.track({
-        userId: user.id,
+      analytics.capture({
+        distinctId: user.id,
         event: 'received_email_saved',
         properties: {
           env: env.server.apiEnv,

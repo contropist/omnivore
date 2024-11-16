@@ -1,14 +1,19 @@
-import { createApp } from '../src/server'
+import { ConnectionOptions, Job, QueueEvents, Worker } from 'bullmq'
+import { createServer } from 'http'
+import { nanoid } from 'nanoid'
 import supertest from 'supertest'
 import { v4 } from 'uuid'
+import { makeApolloServer } from '../src/apollo'
+import { BACKEND_QUEUE_NAME, createWorker } from '../src/queue-processor'
+import { createApp } from '../src/server'
 import { corsConfig } from '../src/utils/corsConfig'
-import { ArticleSavingRequestStatus, Label, Page } from '../src/elastic/types'
-import { PageType } from '../src/generated/graphql'
-import { createPubSubClient } from '../src/datalayer/pubsub'
-import { createPage } from '../src/elastic/pages'
 
-const { app, apollo } = createApp()
+const app = createApp()
+const httpServer = createServer(app)
+const apollo = makeApolloServer(app, httpServer)
 export const request = supertest(app)
+let worker: Worker
+let queueEvents: QueueEvents
 
 export const startApolloServer = async () => {
   await apollo.start()
@@ -19,17 +24,34 @@ export const stopApolloServer = async () => {
   await apollo.stop()
 }
 
+export const startWorker = (connection: ConnectionOptions) => {
+  worker = createWorker(connection)
+  queueEvents = new QueueEvents(BACKEND_QUEUE_NAME, {
+    connection,
+  })
+}
+
+export const stopWorker = async () => {
+  await queueEvents.close()
+  await worker.close()
+}
+
+export const waitUntilJobsDone = async (jobs: Job[]) => {
+  await Promise.all(
+    jobs.map((job) => job.waitUntilFinished(queueEvents, 10000))
+  )
+}
+
 export const graphqlRequest = (
   query: string,
-  authToken?: string
+  authToken: string,
+  variables?: Record<string, unknown>
 ): supertest.Test => {
   return request
     .post(apollo.graphqlPath)
-    .send({
-      query,
-    })
+    .send({ query, variables })
     .set('Accept', 'application/json')
-    .set('authorization', authToken || '')
+    .set('authorization', authToken)
     .expect('Content-Type', /json/)
 }
 
@@ -37,31 +59,14 @@ export const generateFakeUuid = () => {
   return v4()
 }
 
-export const createTestElasticPage = async (
-  userId: string,
-  labels?: Label[]
-): Promise<Page> => {
-  const page: Page = {
-    id: '',
-    hash: 'test hash',
-    userId,
-    pageType: PageType.Article,
-    title: 'test title',
-    content: '<p>test content</p>',
-    createdAt: new Date(),
-    savedAt: new Date(),
-    url: 'https://blog.omnivore.app/test-url',
-    slug: 'test-with-omnivore',
-    labels: labels,
-    readingProgressPercent: 0,
-    readingProgressAnchorIndex: 0,
-    state: ArticleSavingRequestStatus.Succeeded,
-  }
+export const generateFakeShortId = () => {
+  return nanoid(8)
+}
 
-  page.id = (await createPage(page, {
-    pubsub: createPubSubClient(),
-    refresh: true,
-    uid: userId,
-  }))!
-  return page
+export const loginAndGetAuthToken = async (email: string) => {
+  const res = await request
+    .post('/local/debug/fake-user-login')
+    .send({ fakeEmail: email })
+
+  return res.body.authToken as string
 }

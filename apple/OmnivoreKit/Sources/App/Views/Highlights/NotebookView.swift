@@ -6,21 +6,24 @@
   import SwiftUI
   import Views
 
+  typealias DeleteHighlightAction = (String) -> Void
+
   struct NotebookView: View {
+    @StateObject var viewModel: NotebookViewModel
+
     @EnvironmentObject var dataService: DataService
     @Environment(\.presentationMode) private var presentationMode
-    @StateObject var viewModel = NotebookViewModel()
 
     @State var showAnnotationModal = false
     @State var errorAlertMessage: String?
     @State var showErrorAlertMessage = false
     @State var noteAnnotation = ""
 
-    let itemObjectID: NSManagedObjectID
     @Binding var hasHighlightMutations: Bool
     @State var setLabelsHighlight: Highlight?
     @State var showShareView: Bool = false
     @State var showConfirmNoteDelete = false
+    @State var onDeleteHighlight: DeleteHighlightAction?
 
     var emptyView: some View {
       Text(LocalText.highlightCardNoHighlightsOnPage)
@@ -134,6 +137,9 @@
                     highlightID: highlightParams.highlightID,
                     dataService: dataService
                   )
+                  if let onDeleteHighlight = onDeleteHighlight {
+                    onDeleteHighlight(highlightParams.highlightID)
+                  }
                 },
                 onSetLabels: { highlightID in
                   setLabelsHighlight = Highlight.lookup(byID: highlightID, inContext: dataService.viewContext)
@@ -149,7 +155,7 @@
         Spacer(minLength: 120)
           .listRowSeparator(.hidden, edges: .all)
       }.sheet(item: $setLabelsHighlight) { highlight in
-        ApplyLabelsView(mode: .highlight(highlight), isSearchFocused: false, onSave: { selectedLabels in
+        ApplyLabelsView(mode: .highlight(highlight), onSave: { selectedLabels in
           hasHighlightMutations = true
 
           viewModel.setLabelsForHighlight(highlightID: highlight.unwrappedID,
@@ -162,7 +168,7 @@
             annotation: $noteAnnotation,
             onSave: {
               viewModel.updateNoteAnnotation(
-                itemObjectID: itemObjectID,
+                itemObjectID: viewModel.item.objectID,
                 annotation: noteAnnotation,
                 dataService: dataService
               )
@@ -176,6 +182,7 @@
             showErrorAlertMessage: $showErrorAlertMessage
           )
         }
+        .navigationViewStyle(StackNavigationViewStyle())
       }
     }
 
@@ -217,7 +224,7 @@
         #endif
       }
       .task {
-        viewModel.load(itemObjectID: itemObjectID, dataService: dataService)
+        viewModel.load(itemObjectID: viewModel.item.objectID, dataService: dataService)
       }
     }
   }

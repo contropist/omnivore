@@ -1,21 +1,62 @@
+import { Action } from 'kbar'
 import type { KeyboardCommand } from './useKeyboardShortcuts'
 import type { NextRouter } from 'next/router'
 
-export function navigationCommands(
-  router: NextRouter | undefined
-): KeyboardCommand[] {
+export function navigationCommands(router: NextRouter | undefined): Action[] {
   return [
     {
-      shortcutKeys: ['g', 'h'],
-      actionDescription: 'Go to Home',
-      shortcutKeyDescription: 'g then h',
-      callback: () => router?.push('/home'),
+      id: 'home',
+      section: 'Navigation',
+      name: 'Go to home',
+      shortcut: ['g', 'h'],
+      keywords: 'go home',
+      perform: () => {
+        console.log('go home')
+        router?.push(`/home`)
+      },
     },
     {
-      shortcutKeys: ['b'],
-      actionDescription: 'Go back',
-      shortcutKeyDescription: 'b',
-      callback: () => router?.back(),
+      id: 'library',
+      section: 'Navigation',
+      name: 'Go to library',
+      shortcut: ['g', 'l'],
+      keywords: 'go library',
+      perform: () => {
+        console.log('go library')
+        router?.push(`/library`)
+      },
+    },
+    {
+      id: 'subscriptions',
+      section: 'Navigation',
+      name: 'Go to subscriptions',
+      shortcut: ['g', 's'],
+      keywords: 'go subscriptions',
+      perform: () => {
+        console.log('go subscriptions')
+        router?.push(`/subscriptions`)
+      },
+    },
+    {
+      id: 'highlights',
+      section: 'Navigation',
+      name: 'Go to highlights',
+      shortcut: ['g', 'i'],
+      keywords: 'go highlights',
+      perform: () => {
+        console.log('go highlights')
+        router?.push(`/highlights`)
+      },
+    },
+    {
+      id: 'goback',
+      section: 'Navigation',
+      name: 'Go back',
+      shortcut: ['g', 'b'],
+      keywords: 'go back',
+      perform: () => {
+        router?.back()
+      },
     },
   ]
 }
@@ -33,9 +74,9 @@ export function searchBarCommands(
       callback: () => setTimeout(() => actionHandler('focusSearchBar'), 0),
     },
     {
-      shortcutKeys: ['x'],
+      shortcutKeys: ['c', 's'],
       actionDescription: 'Clear search bar',
-      shortcutKeyDescription: 'x',
+      shortcutKeyDescription: 'c then s',
       callback: () => actionHandler('clearSearch'),
     },
   ]
@@ -74,6 +115,7 @@ export function primaryCommands(
 
 type LibraryListKeyboardAction =
   | 'openArticle'
+  | 'selectArticle'
   | 'openOriginalArticle'
   | 'moveFocusToNextListItem'
   | 'moveFocusToPreviousListItem'
@@ -88,6 +130,9 @@ type LibraryListKeyboardAction =
   | 'shareItem'
   | 'showAddLinkModal'
   | 'showEditLabelsModal'
+  | 'openNotebook'
+  | 'beginMultiSelect'
+  | 'endMultiSelect'
 
 export function libraryListCommands(
   actionHandler: (action: LibraryListKeyboardAction) => void
@@ -98,6 +143,14 @@ export function libraryListCommands(
       actionDescription: 'Open article',
       shortcutKeyDescription: 'enter/return',
       callback: () => actionHandler('openArticle'),
+    },
+    {
+      shortcutKeys: ['x'],
+      actionDescription: 'Select article',
+      shortcutKeyDescription: 'x',
+      callback: () => {
+        actionHandler('selectArticle')
+      },
     },
     {
       shortcutKeys: ['o'],
@@ -122,6 +175,18 @@ export function libraryListCommands(
       actionDescription: 'Focus previous item in list',
       shortcutKeyDescription: 'k or left arrow',
       callback: () => actionHandler('moveFocusToPreviousListItem'),
+    },
+    {
+      shortcutKeys: ['m', 's'],
+      actionDescription: 'Begin multi select',
+      shortcutKeyDescription: 'm then s',
+      callback: () => actionHandler('beginMultiSelect'),
+    },
+    {
+      shortcutKeys: ['escape'],
+      actionDescription: 'End multi select',
+      shortcutKeyDescription: 'Escape',
+      callback: () => actionHandler('endMultiSelect'),
     },
     // {
     //   shortcutKeys: ['e'],

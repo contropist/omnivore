@@ -14,7 +14,7 @@ export async function addPopularReadMutation(
   readName: string
 ): Promise<string | undefined> {
   const mutation = gql`
-    mutation {
+    mutation AddPopularRead($name: String!) {
       addPopularRead(name: "${readName}") {
         ... on AddPopularReadSuccess {
           pageId
@@ -26,11 +26,8 @@ export async function addPopularReadMutation(
     }
   `
 
-  console.log('addPopularReadMutation', mutation)
-
   try {
     const response = await gqlFetcher(mutation, { readName })
-    console.log('response', response)
     const data = response as AddPopularReadResponse | undefined
     return data?.addPopularRead?.pageId
   } catch (error) {

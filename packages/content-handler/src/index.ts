@@ -1,5 +1,4 @@
 import { parseHTML } from 'linkedom'
-import { Browser } from 'puppeteer-core'
 import {
   ContentHandler,
   NewsletterInput,
@@ -22,6 +21,7 @@ import { MorningBrewHandler } from './newsletters/morning-brew-handler'
 import { RevueHandler } from './newsletters/revue-handler'
 import { SubstackHandler } from './newsletters/substack-handler'
 import { AppleNewsHandler } from './websites/apple-news-handler'
+import { ArsTechnicaHandler } from './websites/ars-technica-handler'
 import { BloombergHandler } from './websites/bloomberg-handler'
 import { DerstandardHandler } from './websites/derstandard-handler'
 import { GitHubHandler } from './websites/github-handler'
@@ -32,10 +32,13 @@ import { PipedVideoHandler } from './websites/piped-video-handler'
 import { ScrapingBeeHandler } from './websites/scrapingBee-handler'
 import { StackOverflowHandler } from './websites/stack-overflow-handler'
 import { TDotCoHandler } from './websites/t-dot-co-handler'
+import { TheAtlanticHandler } from './websites/the-atlantic-handler'
 import { TwitterHandler } from './websites/twitter-handler'
 import { WeixinQqHandler } from './websites/weixin-qq-handler'
 import { WikipediaHandler } from './websites/wikipedia-handler'
 import { YoutubeHandler } from './websites/youtube-handler'
+import { ZhihuHandler } from './websites/zhihu-handler'
+import { TikTokHandler } from './websites/tiktok-handler'
 
 const validateUrlString = (url: string): boolean => {
   const u = new URL(url)
@@ -56,6 +59,8 @@ const validateUrlString = (url: string): boolean => {
 }
 
 const contentHandlers: ContentHandler[] = [
+  new ArsTechnicaHandler(),
+  new TheAtlanticHandler(),
   new AppleNewsHandler(),
   new BloombergHandler(),
   new DerstandardHandler(),
@@ -64,7 +69,6 @@ const contentHandlers: ContentHandler[] = [
   new PdfHandler(),
   new ScrapingBeeHandler(),
   new TDotCoHandler(),
-  new TwitterHandler(),
   new YoutubeHandler(),
   new WikipediaHandler(),
   new GitHubHandler(),
@@ -77,6 +81,9 @@ const contentHandlers: ContentHandler[] = [
   new EnergyWorldHandler(),
   new PipedVideoHandler(),
   new WeixinQqHandler(),
+  new ZhihuHandler(),
+  new TwitterHandler(),
+  new TikTokHandler(),
 ]
 
 const newsletterHandlers: ContentHandler[] = [
@@ -98,8 +105,7 @@ const newsletterHandlers: ContentHandler[] = [
 ]
 
 export const preHandleContent = async (
-  url: string,
-  browser: Browser
+  url: string
 ): Promise<PreHandleResult | undefined> => {
   // Before we run the regular handlers we check to see if we need tp
   // pre-resolve the URL. TODO: This should probably happen recursively,
@@ -123,7 +129,7 @@ export const preHandleContent = async (
   for (const handler of contentHandlers) {
     if (handler.shouldPreHandle(url)) {
       console.log('preHandleContent', handler.name, url)
-      return handler.preHandle(url, browser)
+      return handler.preHandle(url)
     }
   }
   return undefined

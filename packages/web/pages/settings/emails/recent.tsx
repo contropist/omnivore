@@ -108,12 +108,11 @@ const ViewRecentEmailModal = (
           width: '100%',
           maxWidth: '650px',
         }}
-        onInteractOutside={() => {
-          // remove focus from modal
-          ;(document.activeElement as HTMLElement).blur()
+        onInteractOutside={(event) => {
+          event.preventDefault()
         }}
       >
-        <VStack distribution="start">
+        <VStack distribution="start" css={{ height: '100%' }}>
           <ModalTitleBar title="View Email" onOpenChange={props.onOpenChange} />
           {props.display == 'text' ? (
             <Box
@@ -133,9 +132,16 @@ const ViewRecentEmailModal = (
                 height: '100%',
                 fontSize: '12px',
                 overflowY: 'scroll',
+                iframe: {
+                  width: '100%',
+                  height: '100%',
+                  display: 'block',
+                  border: 'none',
+                },
               }}
-              dangerouslySetInnerHTML={{ __html: props.recentEmail.html }}
-            ></Box>
+            >
+              <iframe srcDoc={props.recentEmail.html}></iframe>
+            </Box>
           )}
         </VStack>
       </ModalContent>
@@ -145,15 +151,13 @@ const ViewRecentEmailModal = (
 
 export default function RecentEmails(): JSX.Element {
   const { recentEmails, revalidate, isValidating } = useGetRecentEmailsQuery()
-  const [viewingEmailText, setViewingEmailText] = useState<
-    RecentEmail | undefined
-  >(undefined)
+  const [viewingEmailText, setViewingEmailText] =
+    useState<RecentEmail | undefined>(undefined)
 
-  const [viewingEmailHtml, setViewingEmailHtml] = useState<
-    RecentEmail | undefined
-  >(undefined)
+  const [viewingEmailHtml, setViewingEmailHtml] =
+    useState<RecentEmail | undefined>(undefined)
 
-  applyStoredTheme(false)
+  applyStoredTheme()
 
   const sortedRecentEmails = useMemo(() => {
     return recentEmails.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -161,7 +165,7 @@ export default function RecentEmails(): JSX.Element {
 
   return (
     <SettingsTable
-      pageId="api-keys"
+      pageId="recent-emails"
       pageInfoLink="https://docs.omnivore.app/using/inbox.html"
       headerTitle="Recently Received Emails"
     >

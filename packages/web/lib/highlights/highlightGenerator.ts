@@ -4,7 +4,9 @@ import type { Highlight } from '../networking/fragments/highlightFragment'
 import { interpolationSearch } from './interpolationSearch'
 import {
   highlightIdAttribute,
+  highlightLabelIdAttribute,
   highlightNoteIdAttribute,
+  labelsImage,
   noteImage,
 } from './highlightHelpers'
 
@@ -24,6 +26,13 @@ const maxDeepPatchDistance = 4000
 const maxDeepPatchThreshhold = 0.5
 const maxSurroundingTextLength = 2000
 
+/**
+ * Wrapper for text node
+ *
+ * @property startIndex - offset from the start of article for which the text begins
+ * @property node - the text node
+ * @property startsParagraph - whether a new paragraph is started
+ */
 type TextNode = {
   startIndex: number
   node: Node
@@ -35,12 +44,18 @@ type ArticleTextContent = {
   articleText: string
 }
 
+/**
+ * Location of a highlight as starting/ending offset from the start of article. The end offset is non-inclusive
+ */
 export type HighlightLocation = {
   id: string
   start: number
   end: number
 }
 
+/**
+ * Relevant attributes of a highlight node created in DOM
+ */
 export type HighlightNodeAttributes = {
   prefix: string
   suffix: string
@@ -67,18 +82,35 @@ function nodeAttributesFromHighlight(
   const patch = highlight.patch
   const id = highlight.id
   const withNote = !!highlight.annotation
+  const withLabels = (highlight.labels?.length ?? 0) > 0
   const tooltip = undefined
-  const customColor = highlight.createdByMe
-    ? undefined
-    : 'var(--colors-recommendedHighlightBackground)'
+  const customColor = highlight.color
 
-  return makeHighlightNodeAttributes(patch, id, withNote, customColor, tooltip)
+  return makeHighlightNodeAttributes(
+    patch,
+    id,
+    withNote,
+    withLabels,
+    customColor,
+    tooltip
+  )
 }
 
+/**
+ * Make a highlight on the highlight selection and return its attributes
+ *
+ * @param patch - {@link generateDiffPatch|patch} of the highlight location
+ * @param id - highlight id
+ * @param withNote - whether highlight has notes
+ * @param customColor - color of highlight
+ * @param tooltip
+ * @returns relevant highlight attributes
+ */
 export function makeHighlightNodeAttributes(
   patch: string,
   id: string,
   withNote: boolean,
+  withLabels: boolean,
   customColor?: string,
   tooltip?: string
 ): HighlightNodeAttributes {
@@ -115,6 +147,11 @@ export function makeHighlightNodeAttributes(
     })
     const { parentNode, nextSibling } = node
 
+    if (node.textContent && !/[^\t\n\r ]/.test(node.textContent)) {
+      startingTextNodeIndex++
+      continue
+    }
+
     let isPre = false
     const nodeElement = node instanceof HTMLElement ? node : node.parentElement
     if (nodeElement) {
@@ -137,15 +174,17 @@ export function makeHighlightNodeAttributes(
         }
 
         const newHighlightSpan = document.createElement('span')
-        newHighlightSpan.className = withNote
-          ? highlightWithNoteClassName
-          : highlightClassname
+        newHighlightSpan.className = highlightClassname
+
+        if (withNote) {
+          newHighlightSpan.className = `${newHighlightSpan.className} ${highlightWithNoteClassName}`
+        }
+
+        if (customColor) {
+          newHighlightSpan.className = `${newHighlightSpan.className} highlight__${customColor}`
+        }
+
         newHighlightSpan.setAttribute(highlightIdAttribute, id)
-        customColor &&
-          newHighlightSpan.setAttribute(
-            'style',
-            `background-color: ${customColor} !important`
-          )
         tooltip && newHighlightSpan.setAttribute('title', tooltip)
         newHighlightSpan.appendChild(newTextNode)
         lastElement = newHighlightSpan
@@ -155,12 +194,10 @@ export function makeHighlightNodeAttributes(
     startingTextNodeIndex++
   }
   if (withNote && lastElement) {
-    lastElement.classList.add('last_element')
-
-    const svg = noteImage()
+    const svg = noteImage(customColor)
     svg.setAttribute(highlightNoteIdAttribute, id)
 
-    const ctr = document.createElement('div')
+    const ctr = document.createElement('span')
     ctr.className = 'highlight_note_button'
     ctr.appendChild(svg)
     ctr.setAttribute(highlightNoteIdAttribute, id)
@@ -169,6 +206,19 @@ export function makeHighlightNodeAttributes(
 
     lastElement.appendChild(ctr)
   }
+  // if (withLabels && lastElement) {
+  //   const svg = labelsImage(customColor)
+  //   svg.setAttribute(highlightLabelIdAttribute, id)
+
+  //   const ctr = document.createElement('span')
+  //   ctr.className = 'highlight_label_button'
+  //   ctr.appendChild(svg)
+  //   ctr.setAttribute(highlightLabelIdAttribute, id)
+  //   ctr.setAttribute('width', '14px')
+  //   ctr.setAttribute('height', '14px')
+
+  //   lastElement.appendChild(ctr)
+  // }
 
   return {
     prefix,
@@ -179,6 +229,15 @@ export function makeHighlightNodeAttributes(
   }
 }
 
+/**
+ * Given a text selection by user, annotate the article around the selection and
+ * produce a {@link https://github.com/google/diff-match-patch | diff patch}
+ *
+ * The diff patch is used for identifying the selection/highlight location
+ *
+ * @param range text selection range
+ * @returns diff patch
+ */
 export function generateDiffPatch(range: Range): string {
   const articleContentElement = document.getElementById(articleContainerId)
   if (!articleContentElement)
@@ -212,7 +271,12 @@ export function generateDiffPatch(range: Range): string {
   return patch
 }
 
-export function wrapHighlightTagAroundRange(range: Range): [number, number] {
+/**
+ * Retrieve starting and ending offsets to the highlight selection
+ * @param range highlight selection
+ * @returns starting offset and ending offset (non-inclusive)
+ */
+export function retrieveOffsetsForSelection(range: Range): [number, number] {
   const patch = generateDiffPatch(range)
   const { highlightTextStart, highlightTextEnd } =
     selectionOffsetsFromPatch(patch)
@@ -260,6 +324,15 @@ const getArticleTextNodes = (
   return { textNodes, articleText }
 }
 
+/**
+ * Return the offsets to the selection/highlight
+ *
+ * @param patch {@link generateDiffPatch|diff patch} identifying a selection/highlight location
+ * @returns
+ * - highlightTextStart - The start of highlight, offset from the start of article by characters
+ * - highlightTextEnd - The end of highlight (non-inclusive), offset from the start of article by characters
+ * - matchingHighlightContent - the matched highlight
+ */
 const selectionOffsetsFromPatch = (
   patch: string
 ): {

@@ -1,13 +1,19 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { v4 as uuidv4 } from 'uuid'
+import { locale, timeZone } from '../../lib/dateFormatting'
 import { SaveResponseData } from '../../lib/networking/mutations/saveUrlMutation'
 import { ssrFetcher } from '../../lib/networking/networkHelpers'
 
+type Request = NextApiRequest & { cookies: { [key: string]: string } }
+type Response = NextApiResponse
+
 const saveUrl = async (
-  req: NextApiRequest,
+  req: Request,
   url: URL,
   labels: string[] | undefined,
-  state: string | undefined
+  state: string | undefined,
+  timezone?: string,
+  locale?: string
 ) => {
   const clientRequestId = uuidv4()
   const mutation = `
@@ -33,6 +39,8 @@ const saveUrl = async (
         source: 'api-save-url',
         labels: labels?.map((label) => ({ name: label })),
         state,
+        timezone,
+        locale,
       },
     })
 
@@ -48,11 +56,7 @@ const saveUrl = async (
   }
 }
 
-// eslint-disable-next-line import/no-anonymous-default-export
-export default async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<void> => {
+export default async function handler(req: Request, res: Response) {
   const urlStr = req.query['url']
   if (req.query['labels'] && typeof req.query['labels'] === 'string') {
     req.query['labels'] = [req.query['labels']]
@@ -60,7 +64,7 @@ export default async (
   const labels = req.query['labels'] as string[] | undefined
   const state = req.query['state'] as string | undefined
   const url = new URL(urlStr as string)
-  const saveResult = await saveUrl(req, url, labels, state)
+  const saveResult = await saveUrl(req, url, labels, state, timeZone, locale)
   console.log('saveResult: ', saveResult)
   if (saveResult) {
     res.redirect(`/article?url=${encodeURIComponent(url.toString())}`)

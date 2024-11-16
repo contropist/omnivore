@@ -2,7 +2,6 @@ import { env } from '../env'
 
 export const corsConfig = {
   credentials: true,
-  // allow https://studio.apollographql.com for local env
   origin: [
     'https://omnivore.app',
     'https://dev.omnivore.app',
@@ -11,8 +10,14 @@ export const corsConfig = {
     'https://web-dev.omnivore.app',
     'https://web-demo.omnivore.app',
     'http://localhost:3000',
-    'lsp://logseq.io',
     env.dev.isLocal && 'https://studio.apollographql.com',
+    env.client.url,
+    'lsp://logseq.io',
     'app://obsidian.md',
+    'https://plugins.amplenote.com',
+    'amplenote-handler://bundle',
+    'capacitor://localhost',
+    'http://localhost',
   ],
+  maxAge: 86400,
 }

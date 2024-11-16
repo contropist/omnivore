@@ -1,32 +1,31 @@
 import { useRouter } from 'next/router'
-import { HighlighterCircle } from 'phosphor-react'
+import { HighlighterCircle } from '@phosphor-icons/react'
 import { useCallback, useEffect, useReducer, useState } from 'react'
-import { Toaster } from 'react-hot-toast'
 import { Highlight } from '../../../lib/networking/fragments/highlightFragment'
 import {
   LibraryItem,
   LibraryItemNode,
-} from '../../../lib/networking/queries/useGetLibraryItemsQuery'
+} from '../../../lib/networking/library_items/useLibraryItems'
 import { UserBasicData } from '../../../lib/networking/queries/useGetViewerQuery'
 import { showErrorToast, showSuccessToast } from '../../../lib/toastHelpers'
 import { Dropdown, DropdownOption } from '../../elements/DropdownElements'
 
 import { Box, HStack, SpanBox, VStack } from '../../elements/LayoutPrimitives'
 import { MenuTrigger } from '../../elements/MenuTrigger'
-import { StyledText } from '../../elements/StyledText'
-import {
-  MetaStyle,
-  timeAgo,
-} from '../../patterns/LibraryCards/LibraryCardStyles'
+import { MetaStyle } from '../../patterns/LibraryCards/LibraryCardStyles'
+import { timeAgo } from '../../../lib/textFormatting'
 import { LibraryHighlightGridCard } from '../../patterns/LibraryCards/LibraryHighlightGridCard'
-import { Notebook } from '../article/Notebook'
+import { NotebookContent } from '../article/Notebook'
 import { EmptyHighlights } from './EmptyHighlights'
-import { HEADER_HEIGHT } from './HeaderSpacer'
 import { highlightsAsMarkdown } from './HighlightItem'
+import { MenuHeaderButton } from './LibraryHeader'
 
 type HighlightItemsLayoutProps = {
   items: LibraryItem[]
   viewer: UserBasicData | undefined
+
+  showFilterMenu: boolean
+  setShowFilterMenu: (show: boolean) => void
 
   gridContainerRef: React.RefObject<HTMLDivElement>
 }
@@ -34,9 +33,8 @@ type HighlightItemsLayoutProps = {
 export function HighlightItemsLayout(
   props: HighlightItemsLayoutProps
 ): JSX.Element {
-  const [currentItem, setCurrentItem] = useState<LibraryItem | undefined>(
-    undefined
-  )
+  const [currentItem, setCurrentItem] =
+    useState<LibraryItem | undefined>(undefined)
 
   const listReducer = (
     state: LibraryItem[],
@@ -106,7 +104,7 @@ export function HighlightItemsLayout(
       <Box
         css={{
           width: '100%',
-          height: `calc(100vh - ${HEADER_HEIGHT})`,
+          height: `100vh`,
         }}
       >
         <EmptyHighlights />
@@ -119,7 +117,7 @@ export function HighlightItemsLayout(
       <HStack
         css={{
           width: '100%',
-          height: `calc(100vh - ${HEADER_HEIGHT})`,
+          height: `100vh`,
           '@lgDown': {
             overflowY: 'scroll',
           },
@@ -129,7 +127,6 @@ export function HighlightItemsLayout(
         distribution="start"
         alignment="start"
       >
-        <Toaster />
         <HStack
           css={{
             flexGrow: '0',
@@ -147,7 +144,7 @@ export function HighlightItemsLayout(
         >
           <VStack
             css={{
-              minHeight: `calc(100vh - ${HEADER_HEIGHT})`,
+              minHeight: `100vh`,
               bg: '$thBackground',
             }}
             distribution="start"
@@ -161,8 +158,22 @@ export function HighlightItemsLayout(
                 borderBottom: '1px solid $thBorderColor',
               }}
               alignment="center"
-              distribution="center"
-            ></HStack>
+              distribution="start"
+            >
+              <SpanBox
+                css={{
+                  display: 'none',
+                  '@mdDown': {
+                    display: 'flex',
+                  },
+                }}
+              >
+                <MenuHeaderButton
+                  showFilterMenu={props.showFilterMenu}
+                  setShowFilterMenu={props.setShowFilterMenu}
+                />
+              </SpanBox>
+            </HStack>
             <LibraryItemsList
               items={items}
               viewer={props.viewer}
@@ -369,7 +380,7 @@ function HighlightList(props: HighlightListProps): JSX.Element {
   }, [props.item.node.highlights])
 
   const viewInReader = useCallback(
-    (highlightId) => {
+    (highlightId: string) => {
       if (!router || !router.isReady || !props.viewer) {
         showErrorToast('Error navigating to highlight')
         return
@@ -415,24 +426,11 @@ function HighlightList(props: HighlightListProps): JSX.Element {
       <HStack
         css={{
           width: '100%',
-          borderBottom: '1px solid $thBorderColor',
+          height: '100%',
         }}
         alignment="start"
-        distribution="center"
+        distribution="end"
       >
-        <StyledText
-          css={{
-            fontWeight: '600',
-            fontSize: '15px',
-            fontFamily: '$display',
-            width: '100%',
-            color: 'thTextContrast2',
-            m: '0px',
-            pb: '5px',
-          }}
-        >
-          NOTEBOOK
-        </StyledText>
         <Dropdown triggerElement={<MenuTrigger />}>
           <DropdownOption
             onSelect={() => {
@@ -442,13 +440,13 @@ function HighlightList(props: HighlightListProps): JSX.Element {
           />
         </Dropdown>
       </HStack>
-      <HStack css={{ width: '100%', height: '100%' }}>
+      <HStack
+        css={{ width: '100%', height: '100%', bg: '$thLibrarySearchbox' }}
+      >
         {props.viewer && (
-          <Notebook
-            sizeMode="normal"
+          <NotebookContent
             viewer={props.viewer}
             item={props.item.node}
-            highlights={props.item.node.highlights ?? []}
             viewInReader={viewInReader}
           />
         )}

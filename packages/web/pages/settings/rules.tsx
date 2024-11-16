@@ -1,26 +1,22 @@
+import { Button, Form, Input, Modal, Select, Space, Table, Tag } from 'antd'
+import 'antd/dist/antd.compact.css'
 import { useCallback, useMemo, useState } from 'react'
-import { Toaster } from 'react-hot-toast'
-
-import { showErrorToast, showSuccessToast } from '../../lib/toastHelpers'
-import { applyStoredTheme } from '../../lib/themeUpdater'
+import { Box, HStack } from '../../components/elements/LayoutPrimitives'
+import { SettingsLayout } from '../../components/templates/SettingsLayout'
+import { Label } from '../../lib/networking/fragments/labelFragment'
+import { deleteRuleMutation } from '../../lib/networking/mutations/deleteRuleMutation'
+import { setRuleMutation } from '../../lib/networking/mutations/setRuleMutation'
+import { useGetIntegrationsQuery } from '../../lib/networking/queries/useGetIntegrationsQuery'
 import {
   Rule,
   RuleAction,
   RuleActionType,
+  RuleEventType,
   useGetRulesQuery,
 } from '../../lib/networking/queries/useGetRulesQuery'
-
-import { SettingsLayout } from '../../components/templates/SettingsLayout'
-import { Button, Space, Table, Form, Input, Modal, Tag, Select } from 'antd'
-
-// import 'antd/dist/antd.dark.css'
-import 'antd/dist/antd.compact.css'
-
-import { Box, HStack } from '../../components/elements/LayoutPrimitives'
-import { useGetLabelsQuery } from '../../lib/networking/queries/useGetLabelsQuery'
-import { Label } from '../../lib/networking/fragments/labelFragment'
-import { setRuleMutation } from '../../lib/networking/mutations/setRuleMutation'
-import { deleteRuleMutation } from '../../lib/networking/mutations/deleteRuleMutation'
+import { applyStoredTheme } from '../../lib/themeUpdater'
+import { showErrorToast, showSuccessToast } from '../../lib/toastHelpers'
+import { useGetLabels } from '../../lib/networking/labels/useLabels'
 
 type CreateRuleModalProps = {
   isModalOpen: boolean
@@ -28,18 +24,34 @@ type CreateRuleModalProps = {
   revalidate: () => void
 }
 
+const eventTypeObj = {
+  PAGE_CREATED: 'PAGE_CREATED',
+  PAGE_UPDATED: 'PAGE_UPDATED',
+  HIGHLIGHT_CREATED: 'HIGHLIGHT_CREATED',
+  HIGHLIGHT_UPDATED: 'HIGHLIGHT_UPDATED',
+  LABEL_CREATED: 'LABEL_ATTACHED',
+}
+
 const CreateRuleModal = (props: CreateRuleModalProps): JSX.Element => {
   const [form] = Form.useForm()
 
   const onOk = async (values: any) => {
     const name = form.getFieldValue('name')
-    const filter = form.getFieldValue('filter')
-    await setRuleMutation({
-      name,
-      filter,
-      actions: [],
-      enabled: true,
-    })
+    const filter = form.getFieldValue('filter') || 'in:all' // default to all
+    const eventTypes = form.getFieldValue('eventTypes')
+    try {
+      await setRuleMutation({
+        name,
+        filter,
+        actions: [],
+        enabled: true,
+        eventTypes,
+      })
+    } catch (error) {
+      showErrorToast('Error creating rule')
+      return
+    }
+
     form.resetFields()
     props.setIsModalOpen(false)
     props.revalidate()
@@ -55,7 +67,7 @@ const CreateRuleModal = (props: CreateRuleModalProps): JSX.Element => {
     <Modal
       title="Create Rule"
       open={props.isModalOpen}
-      onOk={onOk}
+      onOk={form.submit}
       onCancel={onCancel}
       destroyOnClose={true}
     >
@@ -64,7 +76,7 @@ const CreateRuleModal = (props: CreateRuleModalProps): JSX.Element => {
         name="createRule"
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
-        // onFinish={onFinish}
+        onFinish={onOk}
         // onFinishFailed={onFinishFailed}
         autoComplete="off"
       >
@@ -76,12 +88,34 @@ const CreateRuleModal = (props: CreateRuleModalProps): JSX.Element => {
           <Input />
         </Form.Item>
 
-        <Form.Item
-          label="Filter"
-          name="filter"
-          rules={[{ required: true, message: 'Please enter the rule filter' }]}
-        >
+        <Form.Item label="Filter" name="filter">
           <Input />
+        </Form.Item>
+
+        <Form.Item
+          label="When"
+          name="eventTypes"
+          rules={[
+            {
+              required: true,
+              message: 'Please select when the rule will be triggered',
+            },
+          ]}
+        >
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Please select when the rule will be triggered"
+          >
+            {Object.keys(RuleEventType).map((key: string, index: number) => {
+              const value = Object.values(RuleEventType)[index]
+              return (
+                <Select.Option key={key} value={value}>
+                  {eventTypeObj[value]}
+                </Select.Option>
+              )
+            })}
+          </Select>
         </Form.Item>
       </Form>
     </Modal>
@@ -96,13 +130,35 @@ type CreateActionModalProps = {
 
 const CreateActionModal = (props: CreateActionModalProps): JSX.Element => {
   const [form] = Form.useForm()
-  const { labels } = useGetLabelsQuery()
+  const { data: labels } = useGetLabels()
+  const { integrations } = useGetIntegrationsQuery()
+
+  const integrationOptions = ['NOTION', 'READWISE']
+
+  const isIntegrationEnabled = (integration: string): boolean => {
+    return integrations.some(
+      (i) => i.name.toUpperCase() === integration.toUpperCase()
+    )
+  }
 
   const onOk = async (values: any) => {
     const actionType = form.getFieldValue('actionType') as RuleActionType
-    const params =
-      actionType == RuleActionType.AddLabel ? form.getFieldValue('labels') : []
+    let params = []
+    if (actionType == RuleActionType.AddLabel) {
+      params = form.getFieldValue('labels')
+    } else if (actionType == RuleActionType.Webhook) {
+      params = [form.getFieldValue('url')]
+    } else if (actionType == RuleActionType.Export) {
+      params = form.getFieldValue('integrations')
+    }
+
     if (props.rule) {
+      // prevent adding duplicate actions
+      if (props.rule.actions.some((a) => a.type === actionType)) {
+        showErrorToast('Action already exists in the rule.')
+        return
+      }
+
       await setRuleMutation({
         id: props.rule.id,
         name: props.rule.name,
@@ -115,6 +171,7 @@ const CreateActionModal = (props: CreateActionModalProps): JSX.Element => {
             params: params,
           },
         ],
+        eventTypes: props.rule.eventTypes,
       })
       form.resetFields()
       props.setIsModalOpen(false)
@@ -130,7 +187,7 @@ const CreateActionModal = (props: CreateActionModalProps): JSX.Element => {
     <Modal
       title="Create Action"
       open={props.rule != undefined}
-      onOk={onOk}
+      onOk={form.submit}
       onCancel={() => {
         form.resetFields()
         props.setIsModalOpen(false)
@@ -141,6 +198,7 @@ const CreateActionModal = (props: CreateActionModalProps): JSX.Element => {
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         autoComplete="off"
+        onFinish={onOk}
       >
         <Form.Item
           label="Action"
@@ -172,10 +230,63 @@ const CreateActionModal = (props: CreateActionModalProps): JSX.Element => {
             ]}
           >
             <Select mode="multiple">
-              {labels.map((label) => {
+              {labels?.map((label) => {
                 return (
                   <Select.Option key={label.id} value={label.id}>
                     {label.name}
+                  </Select.Option>
+                )
+              })}
+            </Select>
+          </Form.Item>
+        )}
+
+        {actionType == RuleActionType.Webhook && (
+          <Form.Item
+            label="URL"
+            name="url"
+            rules={[
+              { required: true, message: 'Please key in your webhook url' },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+        )}
+
+        {actionType == RuleActionType.Export && (
+          <Form.Item
+            label="Integrations"
+            name="integrations"
+            hasFeedback
+            rules={[
+              {
+                required: true,
+                message: 'Please choose at least one integration',
+              },
+              {
+                validator: (_, value: string[]) => {
+                  value.forEach((v) => {
+                    if (!isIntegrationEnabled(v)) {
+                      return Promise.reject(`Integration ${v} is not enabled`)
+                    }
+                  })
+
+                  return Promise.resolve()
+                },
+              },
+            ]}
+          >
+            <Select mode="multiple">
+              {integrationOptions.map((integration) => {
+                return (
+                  <Select.Option key={integration} value={integration}>
+                    {isIntegrationEnabled(integration) ? (
+                      integration
+                    ) : (
+                      <Button type="link" href="/settings/integrations">
+                        Connect to {integration}
+                      </Button>
+                    )}
                   </Select.Option>
                 )
               })}
@@ -189,7 +300,7 @@ const CreateActionModal = (props: CreateActionModalProps): JSX.Element => {
 
 export default function Rules(): JSX.Element {
   const { rules, revalidate } = useGetRulesQuery()
-  const { labels } = useGetLabelsQuery()
+  const { data: labels } = useGetLabels()
   const [isCreateRuleModalOpen, setIsCreateRuleModalOpen] = useState(false)
   const [createActionRule, setCreateActionRule] =
     useState<Rule | undefined>(undefined)
@@ -201,11 +312,13 @@ export default function Rules(): JSX.Element {
         name: rule.name,
         filter: rule.filter,
         actions: rule.actions,
+        eventTypes: rule.eventTypes,
+        failedAt: rule.failedAt,
       }
     })
   }, [rules])
 
-  applyStoredTheme(false)
+  applyStoredTheme()
 
   const deleteRule = useCallback(
     async (rule: Rule) => {
@@ -232,7 +345,7 @@ export default function Rules(): JSX.Element {
           })?.name ?? 'unknown'
         )
       }
-      return ''
+      return param
     },
     [labels]
   )
@@ -249,13 +362,27 @@ export default function Rules(): JSX.Element {
       key: 'filter',
     },
     {
+      title: 'When',
+      render: (text: string, row: { eventTypes: RuleEventType[] }) => (
+        <>
+          {row.eventTypes.map((eventType: RuleEventType, index: number) => {
+            return (
+              <Tag color={'geekblue'} key={index}>
+                {eventTypeObj[eventType]}
+              </Tag>
+            )
+          })}
+        </>
+      ),
+    },
+    {
       title: 'Actions',
       render: (text: string, row: { actions: RuleAction[] }) => (
         <>
           {row.actions.map((action: RuleAction, index: number) => {
             const color = action.type.length > 5 ? 'geekblue' : 'green'
             return (
-              <Tag color={color} key={index}>
+              <Tag color={color} key={index} style={{ whiteSpace: 'unset' }}>
                 {action.type}(
                 {action.params.map((param: string, index: number) => {
                   const paramString = stringForActionParam(action.type, param)
@@ -269,6 +396,11 @@ export default function Rules(): JSX.Element {
           })}
         </>
       ),
+    },
+    {
+      title: 'Failed At',
+      dataIndex: 'failedAt',
+      key: 'failedAt',
     },
     {
       title: '',
@@ -300,12 +432,6 @@ export default function Rules(): JSX.Element {
 
   return (
     <SettingsLayout>
-      <Toaster
-        containerStyle={{
-          top: '5rem',
-        }}
-      />
-
       <CreateRuleModal
         revalidate={revalidate}
         isModalOpen={isCreateRuleModalOpen}
@@ -322,7 +448,9 @@ export default function Rules(): JSX.Element {
         revalidate={revalidate}
       />
 
-      <Box css={{ pt: '44px', px: '10%', '@smDown': { px: '0' } }}>
+      <Box
+        css={{ pt: '44px', px: '10%', '@smDown': { px: '0' }, width: '100%' }}
+      >
         <HStack css={{ py: '16px' }} distribution="end">
           <Button
             onClick={() => {

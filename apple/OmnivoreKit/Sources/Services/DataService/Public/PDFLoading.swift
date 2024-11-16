@@ -4,12 +4,18 @@ import Models
 import Utils
 
 public extension DataService {
-  func loadPDFData(slug: String, pageURLString: String) async throws -> URL? {
-    guard let url = URL(string: pageURLString) else {
+  func loadPDFData(slug: String, downloadURL: String) async throws -> URL? {
+    guard let url = URL(string: downloadURL) else {
       throw BasicError.message(messageText: "No PDF URL found")
     }
 
-    let result: (Data, URLResponse)? = try? await URLSession.shared.data(from: url)
+    var result: (Data, URLResponse)?
+    do {
+      let request = URLRequest(url: url, timeoutInterval: 120)
+      result = try await URLSession.shared.data(for: request)
+    } catch {
+      print("ERROR DOWNLOADING PDF DATA: ", error)
+    }
 
     guard let httpResponse = result?.1 as? HTTPURLResponse, 200 ..< 300 ~= httpResponse.statusCode else {
       throw BasicError.message(messageText: "pdfFetch failed. no response or bad status code.")
@@ -25,8 +31,8 @@ public extension DataService {
       .appendingPathComponent(UUID().uuidString + ".pdf")
 
     try await backgroundContext.perform { [weak self] in
-      let fetchRequest: NSFetchRequest<Models.LinkedItem> = LinkedItem.fetchRequest()
-      fetchRequest.predicate = NSPredicate(format: "%K == %@", #keyPath(LinkedItem.slug), slug)
+      let fetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
+      fetchRequest.predicate = NSPredicate(format: "%K == %@", #keyPath(LibraryItem.slug), slug)
 
       let linkedItem = try? self?.backgroundContext.fetch(fetchRequest).first
       guard let linkedItem = linkedItem else {

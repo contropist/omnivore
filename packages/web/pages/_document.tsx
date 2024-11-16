@@ -2,13 +2,14 @@
 /* eslint-disable functional/no-class */
 import NextDocument, { Html, Head, Main, NextScript } from 'next/document'
 import { getCssText, globalStyles } from '../components/tokens/stitches.config'
+import { Toaster } from 'react-hot-toast'
 
 export default class Document extends NextDocument {
   render() {
     globalStyles()
 
     return (
-      <Html lang="en">
+      <Html lang="en" dir="ltr">
         <Head>
           <style
             id="stitches"

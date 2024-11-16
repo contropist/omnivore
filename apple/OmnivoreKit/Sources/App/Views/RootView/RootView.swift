@@ -7,6 +7,7 @@ import Views
 
 let appLogger = Logger(subsystem: "app.omnivore", category: "app-package")
 
+@MainActor
 public struct RootView: View {
   @Environment(\.scenePhase) var scenePhase
   @StateObject private var viewModel = RootViewModel()
@@ -15,6 +16,7 @@ public struct RootView: View {
     if let intercomProvider = intercomProvider {
       DataService.showIntercomMessenger = intercomProvider.showIntercomMessenger
       DataService.registerIntercomUser = intercomProvider.registerIntercomUser
+      DataService.setIntercomUserHash = intercomProvider.setIntercomUserHash
       Authenticator.unregisterIntercomUser = intercomProvider.unregisterIntercomUser
     }
 
@@ -39,6 +41,7 @@ public struct RootView: View {
   }
 }
 
+@MainActor
 struct InnerRootView: View {
   @EnvironmentObject var dataService: DataService
   @EnvironmentObject var authenticator: Authenticator
@@ -46,38 +49,19 @@ struct InnerRootView: View {
   @ObservedObject var viewModel: RootViewModel
 
   @ViewBuilder private var innerBody: some View {
-    if authenticator.isLoggedIn {
-      GeometryReader { geo in
-        PrimaryContentView()
-        #if os(iOS)
-          .miniPlayer()
-          .formSheet(isPresented: $viewModel.showNewFeaturePrimer,
-                     modalSize: CGSize(width: geo.size.width * 0.66, height: geo.size.width * 0.66)) {
-            FeaturePrimer.recommendationsPrimer
-          }
-          .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) {
-              viewModel.showNewFeaturePrimer = viewModel.shouldShowNewFeaturePrimer
-              viewModel.shouldShowNewFeaturePrimer = false
-            }
-          }
-        #endif
-        .snackBar(isShowing: $viewModel.showSnackbar, message: viewModel.snackbarMessage)
-          // Schedule the dismissal every time we present the snackbar.
-          .onChange(of: viewModel.showSnackbar) { newValue in
-            if newValue {
-              DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                withAnimation {
-                  viewModel.showSnackbar = false
-                }
-              }
-            }
-          }
-      }
+    if authenticator.isLoggedIn, dataService.appEnvironment.environmentConfigured {
+      PrimaryContentView()
+        .task {
+          try? await dataService.syncOfflineItemsWithServerIfNeeded()
+        }
     } else {
-      WelcomeView()
-        .accessibilityElement()
-        .accessibilityIdentifier("welcomeView")
+      if authenticator.isLoggingOut {
+        LogoutView()
+      } else {
+        WelcomeView()
+          .accessibilityElement()
+          .accessibilityIdentifier("welcomeView")
+      }
     }
   }
 
@@ -87,23 +71,9 @@ struct InnerRootView: View {
         innerBody
       #elseif os(macOS)
         innerBody
-          .frame(minWidth: 400, idealWidth: 1200, minHeight: 400, idealHeight: 1200)
+          .frame(minWidth: 400, idealWidth: 1200, minHeight: 600, idealHeight: 1200)
       #endif
     }
-    #if os(iOS)
-      .onReceive(NSNotification.operationSuccessPublisher) { notification in
-        if let message = notification.userInfo?["message"] as? String {
-          viewModel.showSnackbar = true
-          viewModel.snackbarMessage = message
-        }
-      }
-      .onReceive(NSNotification.operationFailedPublisher) { notification in
-        if let message = notification.userInfo?["message"] as? String {
-          viewModel.showSnackbar = true
-          viewModel.snackbarMessage = message
-        }
-      }
-    #endif
     .onOpenURL { Authenticator.handleGoogleURL(url: $0) }
   }
 
@@ -119,3 +89,4 @@ struct InnerRootView: View {
 //    }
   #endif
 }
+

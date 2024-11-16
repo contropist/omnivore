@@ -1,4 +1,5 @@
 import Combine
+import Models
 import SwiftUI
 import Utils
 
@@ -9,6 +10,7 @@ import Utils
   import Services
   import Views
 
+  @MainActor
   struct PDFViewer: View {
     enum SettingsKeys: String {
       case pageTransitionKey = "PDFViewer.pageTransition"
@@ -39,7 +41,20 @@ import Utils
     @StateObject var pdfStateObject = PDFStateObject()
     @State var readerView: Bool = false
     @State private var shareLink: ShareLink?
+
     @State private var errorMessage: String?
+    @State private var showNotebookView = false
+    @State private var showLabelsModal = false
+    @State private var hasPerformedHighlightMutations = false
+    @State private var errorAlertMessage: String?
+    @State private var showErrorAlertMessage = false
+
+    @State private var annotation = ""
+    @State private var addNoteHighlight: Highlight?
+    @State private var showAnnotationModal = false
+    @State private var showSettingsModal = false
+
+    @Environment(\.presentationCoordinator) var presentationCoordinator
 
     init(viewModel: PDFViewerViewModel) {
       self.viewModel = viewModel
@@ -92,19 +107,13 @@ import Utils
             guard pdfStateObject.controllerNeedsConfig else { return }
             coordinator.setController(controller: controller, dataService: dataService)
 
-            // Disable the Document Editor
-            controller.navigationItem.setRightBarButtonItems(
-              [controller.thumbnailsButtonItem],
-              for: .thumbnails,
-              animated: false
-            )
-
             let barButtonItems = [
               UIBarButtonItem(
                 image: UIImage(systemName: "textformat"),
                 style: .plain,
-                target: controller.settingsButtonItem.target,
-                action: controller.settingsButtonItem.action
+                target: coordinator,
+                action: #selector(PDFViewCoordinator.displaySettingsSheet)
+
               ),
               UIBarButtonItem(
                 image: UIImage(systemName: "book"),
@@ -117,6 +126,27 @@ import Utils
                 style: .plain,
                 target: controller.searchButtonItem.target,
                 action: controller.searchButtonItem.action
+              ),
+              UIBarButtonItem(
+                image: UIImage(named: "notebook", in: Bundle(url: ViewsPackage.bundleURL), with: nil),
+                style: .plain,
+                target: coordinator,
+                action: #selector(PDFViewCoordinator.toggleNotebookView)
+              ),
+              UIBarButtonItem(
+                image: UIImage(named: "label", in: Bundle(url: ViewsPackage.bundleURL), with: nil),
+                style: .plain,
+                target: coordinator,
+                action: #selector(PDFViewCoordinator.toggleLabelsView)
+              )
+            ]
+
+            let leftButtonItems = [
+              UIBarButtonItem(
+                image: UIImage(named: "chevron-right", in: Bundle(url: ViewsPackage.bundleURL), with: nil),
+                style: .plain,
+                target: coordinator,
+                action: #selector(PDFViewCoordinator.pop)
               )
             ]
 
@@ -129,6 +159,7 @@ import Utils
               controller.setPageIndex(pageIndex, animated: false)
             }
 
+            controller.navigationItem.setLeftBarButtonItems(leftButtonItems, for: .document, animated: false)
             controller.navigationItem.setRightBarButtonItems(barButtonItems, for: .document, animated: false)
             pdfStateObject.controllerNeedsConfig = false
           }
@@ -142,12 +173,6 @@ import Utils
                 dataService: dataService
               )
             })
-//          let share = MenuItem(title: "Share", block: {
-//            let shortId = self.coordinator.highlightSelection(pageView: pageView, selectedText: selectedText)
-//            if let shareURL = viewModel.highlightShareURL(shortId: shortId) {
-//              shareLink = ShareLink(id: UUID(), url: shareURL)
-//            }
-//          })
             define?.title = "Lookup"
             return [copy, highlight, define].compactMap { $0 }
           })
@@ -156,32 +181,86 @@ import Utils
             if let copy = menuItems.first(where: { $0.identifier == "Copy" }) {
               result.append(copy)
             }
-
+            let note = MenuItem(title: "Note", block: {
+              if let highlight = annotations?.compactMap({ $0 as? HighlightAnnotation }).first,
+                 let customHighlight = highlight.customData?["omnivoreHighlight"] as? [String: String],
+                 let highlightID = customHighlight["id"]?.lowercased(),
+                 let selectedHighlight = viewModel.findHighlight(dataService: dataService, highlightID: highlightID)
+              {
+                addNoteHighlight = selectedHighlight
+                annotation = selectedHighlight.annotation ?? ""
+                showAnnotationModal = true
+              } else {
+                errorMessage = "Unable to find highlight"
+                showErrorAlertMessage = true
+              }
+            })
+            result.append(note)
             let remove = MenuItem(title: "Remove", block: {
               coordinator.remove(dataService: dataService, annotations: annotations)
             })
             result.append(remove)
 
-            let highlights = annotations?.compactMap { $0 as? HighlightAnnotation }
-            let shortId = highlights.flatMap { coordinator.shortHighlightIds($0).first }
-
-            if let shortId = shortId, FeatureFlag.enableShareButton {
-              let share = MenuItem(title: "Share", block: {
-                if let shareURL = viewModel.highlightShareURL(dataService: dataService, shortId: shortId) {
-                  shareLink = ShareLink(id: UUID(), url: shareURL)
-                }
-              })
-              result.append(share)
-            }
-
             return result
           })
-          .fullScreenCover(isPresented: $readerView, content: {
+          .sheet(isPresented: $showAnnotationModal) {
+            NavigationView {
+              HighlightAnnotationSheet(
+                annotation: $annotation,
+                onSave: {
+                  // annotationSaveTransactionID = UUID()
+                  if let highlightID = addNoteHighlight?.id {
+                    viewModel.updateAnnotation(
+                      highlightID: highlightID,
+                      annotation: annotation,
+                      dataService: dataService
+                    )
+                    showAnnotationModal = false
+                  }
+                },
+                onCancel: {
+                  annotation = ""
+                  addNoteHighlight = nil
+                  showAnnotationModal = false
+                },
+                errorAlertMessage: $errorAlertMessage,
+                showErrorAlertMessage: $showErrorAlertMessage
+              )
+            }
+            .navigationViewStyle(StackNavigationViewStyle())
+          }
+          .formSheet(isPresented: $showSettingsModal, modalSize: CGSize(width: 400, height: 475)) {
+            NavigationView {
+              PDFSettingsView(pdfViewController: coordinator.controller)
+            }
+            .navigationViewStyle(StackNavigationViewStyle())
+          }
+          .sheet(isPresented: $readerView, content: {
             PDFReaderViewController(document: document)
           })
           .accentColor(Color(red: 255 / 255.0, green: 234 / 255.0, blue: 159 / 255.0))
           .sheet(item: $shareLink) {
             ShareSheet(activityItems: [$0.url])
+          }
+          .sheet(isPresented: $showNotebookView, onDismiss: onNotebookViewDismissal) {
+            NotebookView(
+              viewModel: NotebookViewModel(item: viewModel.pdfItem.item),
+              hasHighlightMutations: $hasPerformedHighlightMutations,
+              onDeleteHighlight: { highlightId in
+                coordinator.removeHighlightFromPDF(highlightId: highlightId)
+              }
+            )
+          }
+          .sheet(isPresented: $showLabelsModal) {
+            ApplyLabelsView(mode: .item(viewModel.pdfItem.item), onSave: { _ in
+              showLabelsModal = false
+            })
+          }.task {
+            viewModel.updateItemReadProgress(
+              dataService: dataService,
+              percent: viewModel.pdfItem.item.readingProgress,
+              anchorIndex: Int(viewModel.pdfItem.item.readingProgressAnchor)
+            )
           }
       } else if let errorMessage = errorMessage {
         Text(errorMessage)
@@ -202,13 +281,20 @@ import Utils
       }
     }
 
+    func onNotebookViewDismissal() {
+      guard hasPerformedHighlightMutations else { return }
+
+      hasPerformedHighlightMutations.toggle()
+    }
+
+    @MainActor
     class PDFViewCoordinator: NSObject, PDFDocumentViewControllerDelegate, PDFViewControllerDelegate {
       let document: Document
       let viewModel: PDFViewerViewModel
       var subscriptions = Set<AnyCancellable>()
 
       public var viewer: PDFViewer?
-      var controller: PDFViewController?
+      public var controller: PDFViewController?
 
       init(document: Document, viewModel: PDFViewerViewModel) {
         self.document = document
@@ -223,13 +309,12 @@ import Utils
             let pageIndex = Int(event.pageIndex)
             if let totalPageCount = controller.document?.pageCount {
               let percent = min(100, max(0, ((Double(pageIndex) + 1.0) / Double(totalPageCount)) * 100.0))
-              if percent > self.viewModel.pdfItem.readingProgress {
-                self.viewModel.updateItemReadProgress(
-                  dataService: dataService,
-                  percent: percent,
-                  anchorIndex: pageIndex
-                )
-              }
+              self.viewModel.updateItemReadProgress(
+                dataService: dataService,
+                percent: percent,
+                anchorIndex: pageIndex,
+                force: true
+              )
             }
           }
         }.store(in: &subscriptions)
@@ -237,6 +322,22 @@ import Utils
         controller.documentPublisher.sink { document in
           print("document published", document.isValid)
         }.store(in: &subscriptions)
+      }
+
+      func removeHighlightFromPDF(highlightId: String) {
+        for pageIndex in 0 ..< document.pageCount {
+          let pageHighlights = document.annotations(at: pageIndex, type: HighlightAnnotation.self)
+
+          for annotation in pageHighlights {
+            if let customHighlight = annotation.customData?["omnivoreHighlight"] as? [String: String] {
+              if customHighlight["id"]?.lowercased() == highlightId {
+                if !document.remove(annotations: [annotation]) {
+                  Snackbar.show(message: "Error removing highlight", dismissAfter: 2000)
+                }
+              }
+            }
+          }
+        }
       }
 
       func highlightsOverlap(left: HighlightAnnotation, right: HighlightAnnotation) -> Bool {
@@ -376,9 +477,33 @@ import Utils
         }
       }
 
+      @objc public func pop() {
+        if let viewer = self.viewer {
+          viewer.presentationCoordinator.dismiss()
+        }
+      }
+
       @objc public func toggleReaderView() {
         if let viewer = self.viewer {
           viewer.readerView = !viewer.readerView
+        }
+      }
+
+      @objc public func displaySettingsSheet() {
+        if let viewer = self.viewer {
+          viewer.showSettingsModal = true
+        }
+      }
+
+      @objc public func toggleNotebookView() {
+        if let viewer = self.viewer {
+          viewer.showNotebookView = !viewer.showNotebookView
+        }
+      }
+
+      @objc public func toggleLabelsView() {
+        if let viewer = self.viewer {
+          viewer.showLabelsModal = !viewer.showLabelsModal
         }
       }
 

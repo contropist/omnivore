@@ -1,40 +1,78 @@
-import { useCallback, useState } from 'react'
-import { applyStoredTheme } from '../../lib/themeUpdater'
-
+import { useRouter } from 'next/router'
+import { useCallback, useEffect, useState } from 'react'
+import { Button } from '../../components/elements/Button'
+import {
+  BorderedFormInput,
+  FormLabel,
+} from '../../components/elements/FormElements'
 import { VStack } from '../../components/elements/LayoutPrimitives'
-
 import { StyledText } from '../../components/elements/StyledText'
+import { ConfirmationModal } from '../../components/patterns/ConfirmationModal'
 import { ProfileLayout } from '../../components/templates/ProfileLayout'
+import { theme } from '../../components/tokens/stitches.config'
+import { DEFAULT_HOME_PATH } from '../../lib/navigations'
 import {
   BulkAction,
-  bulkActionMutation,
-} from '../../lib/networking/mutations/bulkActionMutation'
-import { Button } from '../../components/elements/Button'
-import { theme } from '../../components/tokens/stitches.config'
-import { ConfirmationModal } from '../../components/patterns/ConfirmationModal'
+  useBulkActions,
+  useGetLibraryItems,
+} from '../../lib/networking/library_items/useLibraryItems'
+import { applyStoredTheme } from '../../lib/themeUpdater'
 import { showErrorToast, showSuccessToast } from '../../lib/toastHelpers'
-import { useRouter } from 'next/router'
 
 type RunningState = 'none' | 'confirming' | 'running' | 'completed'
 
 export default function BulkPerformer(): JSX.Element {
   const router = useRouter()
 
-  applyStoredTheme(false)
+  applyStoredTheme()
 
   const [action, setAction] = useState<BulkAction | undefined>()
+  const [query, setQuery] = useState<string>('in:all')
+  const [expectedCount, setExpectedCount] = useState<number | undefined>()
   const [errorMessage, setErrorMessage] = useState<string | undefined>()
   const [runningState, setRunningState] = useState<RunningState>('none')
+  const bulkAction = useBulkActions()
+
+  const { data: itemsPages, isLoading } = useGetLibraryItems(
+    'search',
+    undefined,
+    {
+      searchQuery: query,
+      limit: 1,
+      sortDescending: false,
+      includeCount: true,
+    }
+  )
+
+  useEffect(() => {
+    setExpectedCount(itemsPages?.pages.find(() => true)?.pageInfo.totalCount)
+  }, [itemsPages])
 
   const performAction = useCallback(() => {
     ;(async () => {
       console.log('performing action: ', action)
+      if (isLoading) {
+        showErrorToast('Query still being validated.')
+        return
+      }
       if (!action) {
         showErrorToast('Unable to run action, no action set.')
         return
       }
+      if (!expectedCount) {
+        showErrorToast('No items matching this query or query still running.')
+        return
+      }
+      if (!action) {
+        showErrorToast('No action selected')
+        return
+      }
       try {
-        const success = await bulkActionMutation(action)
+        const success = await bulkAction.mutateAsync({
+          action,
+          query,
+          expectedCount,
+        })
         if (!success) {
           throw 'Success not returned'
         }
@@ -44,7 +82,7 @@ export default function BulkPerformer(): JSX.Element {
         showErrorToast('Error performing bulk action.')
       }
     })()
-  }, [action])
+  }, [action, query, expectedCount])
 
   return (
     <ProfileLayout logoDestination="/home">
@@ -75,7 +113,6 @@ export default function BulkPerformer(): JSX.Element {
         >
           Use this tool to perform a bulk operation on all the items in your
           library.<br></br>
-          <a href="https://docs.omnivore.app/using/">More info</a>
         </StyledText>
         <StyledText
           style="caption"
@@ -101,6 +138,22 @@ export default function BulkPerformer(): JSX.Element {
           ) : (
             <>
               <VStack css={{ width: '100%', gap: '15px' }}>
+                <FormLabel className="required">Search Query</FormLabel>
+                <BorderedFormInput
+                  key="fullname"
+                  type="text"
+                  name="name"
+                  defaultValue={query}
+                  placeholder="Enter your query"
+                  css={{ bg: 'white', color: 'black' }}
+                  onChange={(e) => setQuery(e.target.value)}
+                  required
+                />
+                <StyledText style="footnote" css={{ mt: '5px' }}>
+                  Matches {expectedCount} items.
+                </StyledText>
+
+                <FormLabel className="required">Action</FormLabel>
                 <select
                   disabled={runningState == 'running'}
                   onChange={(event) => {
@@ -111,6 +164,7 @@ export default function BulkPerformer(): JSX.Element {
                     setAction(updatedAction)
                   }}
                   style={{
+                    margin: '0px',
                     padding: '8px',
                     height: '38px',
                     borderRadius: '6px',
@@ -120,13 +174,17 @@ export default function BulkPerformer(): JSX.Element {
                 >
                   <option value="none">Choose bulk action</option>
                   <option value="ARCHIVE">Archive All</option>
-                  {router.isReady && router.query['allow_delete'] && (
-                    <option value="DELETE">Delete All</option>
-                  )}
+                  <option value="DELETE">Delete All</option>
                 </select>
 
                 <Button
                   onClick={(e) => {
+                    if (!expectedCount) {
+                      alert(
+                        'No items matching this query or query still running.'
+                      )
+                      return
+                    }
                     if (!action) {
                       alert('No action selected')
                       return
@@ -143,7 +201,7 @@ export default function BulkPerformer(): JSX.Element {
 
           {runningState == 'confirming' && (
             <ConfirmationModal
-              message={`Are you sure you want to ${action} your entire library? This operation can not be undone.`}
+              message={`Are you sure you want to ${action} the ${expectedCount} items matching this query? This operation can not be undone.`}
               onAccept={performAction}
               onOpenChange={() => setRunningState('none')}
             />
@@ -152,7 +210,7 @@ export default function BulkPerformer(): JSX.Element {
             <VStack css={{ width: '100%' }} alignment="center">
               <Button
                 onClick={(e) => {
-                  window.location.href = '/home'
+                  window.location.href = DEFAULT_HOME_PATH
                   e.preventDefault()
                 }}
                 style="ctaDarkYellow"

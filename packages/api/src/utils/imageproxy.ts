@@ -1,5 +1,5 @@
-import { encode } from 'urlsafe-base64'
 import crypto from 'crypto'
+import { encode } from 'urlsafe-base64'
 import { env } from '../env'
 
 function signImageProxyUrl(url: string): string {
@@ -17,8 +17,16 @@ export function createImageProxyUrl(
     return url
   }
 
+  // url is already signed
+  if (url.startsWith(env.imageProxy.url)) {
+    return url
+  }
+
   const urlWithOptions = `${url}#${width}x${height}`
   const signature = signImageProxyUrl(urlWithOptions)
 
   return `${env.imageProxy.url}/${width}x${height},s${signature}/${url}`
 }
+
+export const createThumbnailProxyUrl = (url: string): string =>
+  createImageProxyUrl(url, 320, 320)

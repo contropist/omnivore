@@ -1,55 +1,34 @@
+import { LibraryItem, LibraryItemState } from '../../entity/library_item'
 import {
   MutationUpdatePageArgs,
   UpdatePageError,
-  UpdatePageErrorCode,
   UpdatePageSuccess,
 } from '../../generated/graphql'
-import { authorized, userDataToUser } from '../../utils/helpers'
-import { getPageById, updatePage } from '../../elastic/pages'
-import { Page } from '../../entity/page'
+import { updateLibraryItem } from '../../services/library_item'
 import { Merge } from '../../util'
-
-export type UpdatePageSuccessPartial = Merge<
-  UpdatePageSuccess,
-  { updatedPage: Partial<Page> }
->
+import { authorized } from '../../utils/gql-utils'
 
 export const updatePageResolver = authorized<
-  UpdatePageSuccessPartial,
+  Merge<UpdatePageSuccess, { updatedPage: LibraryItem }>,
   UpdatePageError,
   MutationUpdatePageArgs
->(async (_, { input }, ctx) => {
-  const {
-    models,
-    claims: { uid },
-  } = ctx
-
-  const user = userDataToUser(await models.user.get(uid))
-  if (!user) {
-    return { errorCodes: [UpdatePageErrorCode.Unauthorized] }
-  }
-
-  const page = await getPageById(input.pageId)
-
-  if (!page) return { errorCodes: [UpdatePageErrorCode.NotFound] }
-  else if (page.userId !== user.id)
-    return { errorCodes: [UpdatePageErrorCode.Unauthorized] }
-
-  const pageData = {
-    id: input.pageId,
-    title: input.title ?? undefined,
-    description: input.description ?? undefined,
-    author: input.byline ?? undefined,
-    savedAt: input.savedAt ? new Date(input.savedAt) : undefined,
-    publishedAt: input.publishedAt ? new Date(input.publishedAt) : undefined,
-  }
-
-  const updateResult = await updatePage(input.pageId, pageData, { ...ctx, uid })
-  if (!updateResult) return { errorCodes: [UpdatePageErrorCode.UpdateFailed] }
-
-  const updatedPage = (await getPageById(input.pageId)) as unknown as Page
+>(async (_, { input }, { uid }) => {
+  const updatedPage = await updateLibraryItem(
+    input.pageId,
+    {
+      title: input.title ?? undefined,
+      description: input.description ?? undefined,
+      author: input.byline ?? undefined,
+      savedAt: input.savedAt ? new Date(input.savedAt) : undefined,
+      publishedAt: input.publishedAt ? new Date(input.publishedAt) : undefined,
+      thumbnail: input.previewImage ?? undefined,
+      state: input.state
+        ? (input.state as unknown as LibraryItemState)
+        : undefined,
+    },
+    uid
+  )
   return {
     updatedPage: updatedPage,
-    __typename: 'UpdatePageSuccess',
   }
 })

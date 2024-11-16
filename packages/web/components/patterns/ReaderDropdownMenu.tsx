@@ -4,9 +4,12 @@ import {
   DropdownOption,
   DropdownSeparator,
 } from '../elements/DropdownElements'
+import { ArticleAttributes } from '../../lib/networking/library_items/useLibraryItems'
+import { State } from '../../lib/networking/fragments/articleFragment'
 
 type DropdownMenuProps = {
   triggerElement: ReactNode
+  libraryItem?: ArticleAttributes
   articleActionHandler: (action: string, arg?: unknown) => void
 }
 
@@ -14,19 +17,31 @@ export function ReaderDropdownMenu(props: DropdownMenuProps): JSX.Element {
   return (
     <Dropdown triggerElement={props.triggerElement}>
       <DropdownOption
-        onSelect={() => props.articleActionHandler('archive')}
-        title="Archive (e)"
+        onSelect={async () => {
+          if (props.libraryItem?.state === State.ARCHIVED) {
+            props.articleActionHandler('unarchive')
+          } else {
+            props.articleActionHandler('archive')
+          }
+        }}
+        title={
+          props.libraryItem?.state === State.ARCHIVED
+            ? 'Unarchive (e)'
+            : 'Archive (e)'
+        }
       />
       <DropdownOption
         onSelect={() => props.articleActionHandler('setLabels')}
-        title="Edit Labels (l)"
+        title="Edit labels (l)"
       />
       <DropdownOption
         onSelect={() => props.articleActionHandler('showEditModal')}
-        title="Edit Info (i)"
+        title="Edit info (i)"
       />
       <DropdownOption
-        onSelect={() => props.articleActionHandler('delete')}
+        onSelect={async () => {
+          props.articleActionHandler('delete')
+        }}
         title="Remove (#)"
       />
       <DropdownSeparator />

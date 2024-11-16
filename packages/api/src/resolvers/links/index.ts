@@ -1,87 +1,87 @@
-import { createOrUpdateLinkShareInfo } from '../../datalayer/links/share_info'
-
+import { LibraryItemState } from '../../entity/library_item'
+import { env } from '../../env'
 import {
   ArchiveLinkError,
   ArchiveLinkErrorCode,
   ArchiveLinkSuccess,
   MutationSetLinkArchivedArgs,
-  MutationUpdateLinkShareInfoArgs,
-  UpdateLinkShareInfoError,
-  UpdateLinkShareInfoErrorCode,
-  UpdateLinkShareInfoSuccess,
 } from '../../generated/graphql'
-
-import { authorized } from '../../utils/helpers'
+import { updateLibraryItem } from '../../services/library_item'
 import { analytics } from '../../utils/analytics'
-import { env } from '../../env'
-import { updatePage } from '../../elastic/pages'
+import { authorized } from '../../utils/gql-utils'
 
-export const updateLinkShareInfoResolver = authorized<
-  UpdateLinkShareInfoSuccess,
-  UpdateLinkShareInfoError,
-  MutationUpdateLinkShareInfoArgs
->(async (_obj, args, { models, claims, authTrx }) => {
-  const { title, description } = args.input
+// export const updateLinkShareInfoResolver = authorized<
+//   UpdateLinkShareInfoSuccess,
+//   UpdateLinkShareInfoError,
+//   MutationUpdateLinkShareInfoArgs
+// >(async (_obj, args, { models, claims, authTrx, log }) => {
+//   const { title, description } = args.input
 
-  console.log(
-    'updateLinkShareInfoResolver',
-    args.input.linkId,
-    title,
-    description
-  )
+//   log.info('updateLinkShareInfoResolver', args.input.linkId, title, description)
 
-  // TEMP: because the old API uses articles instead of Links, we are actually
-  // getting an article ID here and need to map it to a link ID. When the API
-  // is updated to use Links instead of Articles this will be removed.
-  const link = await authTrx((tx) =>
-    models.userArticle.getByArticleId(claims.uid, args.input.linkId, tx)
-  )
+//   // TEMP: because the old API uses articles instead of Links, we are actually
+//   // getting an article ID here and need to map it to a link ID. When the API
+//   // is updated to use Links instead of Articles this will be removed.
+//   const link = await authTrx((tx) =>
+//     models.userArticle.getByArticleId(claims.uid, args.input.linkId, tx)
+//   )
 
-  if (!link?.id) {
-    return {
-      __typename: 'UpdateLinkShareInfoError',
-      errorCodes: [UpdateLinkShareInfoErrorCode.Unauthorized],
-    }
-  }
+//   if (!link?.id) {
+//     return {
+//       __typename: 'UpdateLinkShareInfoError',
+//       errorCodes: [UpdateLinkShareInfoErrorCode.Unauthorized],
+//     }
+//   }
 
-  const result = await authTrx((tx) =>
-    createOrUpdateLinkShareInfo(tx, link.id, title, description)
-  )
-  if (!result) {
-    return {
-      __typename: 'UpdateLinkShareInfoError',
-      errorCodes: [UpdateLinkShareInfoErrorCode.BadRequest],
-    }
-  }
+//   const result = await authTrx((tx) =>
+//     createOrUpdateLinkShareInfo(tx, link.id, title, description)
+//   )
+//   if (!result) {
+//     return {
+//       __typename: 'UpdateLinkShareInfoError',
+//       errorCodes: [UpdateLinkShareInfoErrorCode.BadRequest],
+//     }
+//   }
 
-  return {
-    __typename: 'UpdateLinkShareInfoSuccess',
-    message: 'Updated Share Information',
-  }
-})
+//   return {
+//     __typename: 'UpdateLinkShareInfoSuccess',
+//     message: 'Updated Share Information',
+//   }
+// })
 
 export const setLinkArchivedResolver = authorized<
   ArchiveLinkSuccess,
   ArchiveLinkError,
   MutationSetLinkArchivedArgs
->(async (_obj, args, { claims, pubsub }) => {
-  console.log('setLinkArchivedResolver', args.input.linkId)
+>(async (_obj, args, { uid }) => {
+  let state = LibraryItemState.Archived
+  let archivedAt: Date | null = new Date()
+  let event = 'link_archived'
 
-  analytics.track({
-    userId: claims.uid,
-    event: args.input.archived ? 'link_archived' : 'link_unarchived',
+  const isUnarchive = !args.input.archived
+  if (isUnarchive) {
+    state = LibraryItemState.Succeeded
+    archivedAt = null
+    event = 'link_unarchived'
+  }
+
+  analytics.capture({
+    distinctId: uid,
+    event,
     properties: {
       env: env.server.apiEnv,
     },
   })
 
   try {
-    await updatePage(
+    await updateLibraryItem(
       args.input.linkId,
       {
-        archivedAt: args.input.archived ? new Date() : null,
+        state,
+        archivedAt,
+        seenAt: new Date(),
       },
-      { pubsub, uid: claims.uid }
+      uid
     )
   } catch (e) {
     return {
@@ -92,6 +92,6 @@ export const setLinkArchivedResolver = authorized<
 
   return {
     linkId: args.input.linkId,
-    message: 'Link Archived',
+    message: event,
   }
 })

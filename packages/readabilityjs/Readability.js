@@ -23,6 +23,7 @@
 var parseSrcset = require('parse-srcset');
 var htmlEntities = require('html-entities')
 const axios = require("axios");
+const cld = require('cld');
 
 /** Checks whether an element is a wrapper for tweet */
 const hasTweetInChildren = element => {
@@ -51,17 +52,46 @@ const extractPublishedDateFromAuthor = (author)=> {
     return [null, null];
   }
   const authorName = author.replace(/^by\s+/i, '');
-  const regex = /(January|February|March|April|May|June|July|August|September|Octrober|November|December)\s\d{1,2},\s\d{2,4}/;
-  if (!regex.test(author)) {
-    return [authorName, null];
+  const regex = /(January|February|March|April|May|June|July|August|September|October|November|December)\s\d{1,2},\s\d{2,4}/i;
+  const chineseDateRegex = /(\d{2,4})年(\d{1,2})月(\d{1,2})日/;
+
+  // English date
+  if (regex.test(author)) {
+    const match = author.match(regex) || [];
+    return [authorName.replace(regex, ''), match[0]];
   }
 
+  // Chinese date
+  if (chineseDateRegex.test(author)) {
+    const match = author.match(chineseDateRegex);
+    if (match) {
+      const year = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1; // January is 0 in JavaScript Date
+      const day = parseInt(match[3], 10);
+  
+      const publishedAt = new Date(year, month, day);
+      return [authorName.replace(chineseDateRegex, ''), publishedAt];
+    }
+  }
 
-  const matchedDates = author.match(regex) || [];
-  const publishedAt = matchedDates[0];
-
-  return [authorName.replace(regex, ''), publishedAt];
+  return [authorName, null];
 };
+
+// extract published date from url if it's in the format of yyyy/mm/dd or yyyy-mm-dd
+const extractPublishedDateFromUrl = (url) => {
+  if (!url) return null;
+  
+  const regex = /(\d{4})(\/|-)(\d{2})(\/|-)(\d{2})/i;
+  const match = url.match(regex);
+  if (match) {
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[3], 10) - 1; // January is 0 in JavaScript Date
+    const day = parseInt(match[5], 10);
+
+    return new Date(year, month, day);
+  }
+  return null;
+}
 
 /**
  * Public constructor.
@@ -102,6 +132,7 @@ function Readability(doc, options) {
   this._disableJSONLD = !!options.disableJSONLD;
   this._baseURI = options.url || this._doc.baseURI;
   this._documentURI = options.url || this._doc.documentURI;
+  this._ignoreLinkDensity = options.ignoreLinkDensity || false
 
   // Start with all flags set
   this._flags = this.FLAG_STRIP_UNLIKELYS |
@@ -120,20 +151,21 @@ function Readability(doc, options) {
       return `<${node.localName} ${attrPairs}>`;
     };
     this.log = function () {
-      if (typeof dump !== "undefined") {
-        var msg = Array.prototype.map.call(arguments, function(x) {
-          return (x && x.nodeName) ? logNode(x) : x;
-        }).join(" ");
-        dump("Reader: (Readability) " + msg + "\n");
-      } else if (typeof console !== "undefined") {
+      if (typeof console !== "undefined") {
         let args = Array.from(arguments, arg => {
-          if (arg && arg.nodeType === this.ELEMENT_NODE) {
+          if (arg && arg.nodeType == this.ELEMENT_NODE) {
             return logNode(arg);
           }
           return arg;
         });
         args.unshift("Reader: (Readability)");
         console.log.apply(console, args);
+      } else if (typeof dump !== "undefined") {
+        /* global dump */
+        var msg = Array.prototype.map.call(arguments, function(x) {
+          return (x && x.nodeName) ? logNode(x) : x;
+        }).join(" ");
+        dump("Reader: (Readability) " + msg + "\n");
       }
     };
   } else {
@@ -171,13 +203,16 @@ Readability.prototype = {
     // Readability-readerable.js. Please keep both copies in sync.
     articleNegativeLookBehindCandidates: /breadcrumbs|breadcrumb|utils|trilist|_header/i,
     articleNegativeLookAheadCandidates: /outstream(.?)_|sub(.?)_|m_|omeda-promo-|in-article-advert|block-ad-.*|tl_/i,
-    unlikelyCandidates: /\bad\b|ai2html|banner|breadcrumbs|breadcrumb|combx|comment|community|cover-wrap|disqus|extra|footer|gdpr|header|legends|menu|related|remark|replies|rss|shoutbox|sidebar|skyscraper|social|sponsor|supplemental|ad-break|agegate|pagination|pager(?!ow)|popup|yom-remote|copyright|keywords|outline|infinite-list|beta|recirculation|site-index|hide-for-print|post-end-share-cta|post-end-cta-full|post-footer|post-head|post-tag|li-date|main-navigation|programtic-ads|outstream_article|hfeed|comment-holder|back-to-top|show-up-next|onward-journey|topic-tracker|list-nav|block-ad-entity|adSpecs|gift-article-button|modal-title|in-story-masthead|share-tools|standard-dock|expanded-dock|margins-h|subscribe-dialog|icon|bumped|dvz-social-media-buttons|post-toc|mobile-menu|mobile-navbar|tl_article_header|mvp(-post)*-(add-story|soc(-mob)*-wrap)|w-condition-invisible/i,
+    unlikelyCandidates: /\bad\b|ai2html|banner|breadcrumbs|breadcrumb|combx|comment|community|cover-wrap|disqus|extra|footer|gdpr|header|legends|menu|related|remark|replies|rss|shoutbox|sidebar|skyscraper|social|sponsor|supplemental|ad-break|agegate|pagination|pager(?!ow)|popup|yom-remote|copyright|keywords|outline|infinite-list|beta|recirculation|site-index|hide-for-print|post-end-share-cta|post-end-cta-full|post-footer|post-head|post-tag|li-date|main-navigation|programtic-ads|outstream_article|hfeed|comment-holder|back-to-top|show-up-next|onward-journey|topic-tracker|list-nav|block-ad-entity|adSpecs|gift-article-button|modal-title|in-story-masthead|share-tools|standard-dock|expanded-dock|margins-h|subscribe-dialog|icon|bumped|dvz-social-media-buttons|post-toc|mobile-menu|mobile-navbar|tl_article_header|mvp(-post)*-(add-story|soc(-mob)*-wrap)|w-condition-invisible|rich-text-block main w-richtext|rich-text-block_ataglance at-a-glance test w-richtext|PostsPage-commentsSection|hide-text|text-blurple|bottom-wrapper/i,
     // okMaybeItsACandidate: /and|article(?!-breadcrumb)|body|column|content|main|shadow|post-header/i,
     get okMaybeItsACandidate() {
-      return new RegExp(`and|(?<!${this.articleNegativeLookAheadCandidates.source})article(?!-(${this.articleNegativeLookBehindCandidates.source}))|body|column|content|^(?!main-navigation|main-header)main|shadow|post-header|hfeed site|blog-posts hfeed|container-banners|menu-opacity|header-with-anchor-widget`, 'i')
+      return new RegExp(
+        `and|(?<!${this.articleNegativeLookAheadCandidates.source})article(?!-(${this.articleNegativeLookBehindCandidates.source}))|body|column|content|^(?!main-navigation|main-header)main|shadow|post-header|hfeed site|blog-posts hfeed|container-banners|menu-opacity|header-with-anchor-widget|commentOnSelection|highlight--with-header|header-anchor-post`,
+        'i'
+      )
     },
 
-    positive: /article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story|tweet(-\w+)?|instagram|image|container-banners|player/i,
+    positive: /article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story|tweet(-\w+)?|instagram|image|container-banners|player|commentOnSelection/i,
     negative: /\bad\b|hidden|^hid$| hid$| hid |^hid |banner|combx|comment|com-|contact|footer|gdpr|masthead|media|meta|outbrain|promo|related|scroll|share|shoutbox|sidebar|skyscraper|sponsor|shopping|tags|tool|widget|controls|video-controls/i,
     extraneous: /print|archive|comment|discuss|e[\-]?mail|share|reply|all|login|sign|single|utility/i,
     byline: /byline|author|dateline|writtenby|p-author/i,
@@ -194,13 +229,18 @@ Readability.prototype = {
     hashUrl: /^#.+/,
     srcsetUrl: /(\S+)(\s+[\d.]+[xw])?(\s*(?:,|$))/g,
     b64DataUrl: /^data:\s*([^\s;,]+)\s*;\s*base64\s*,/i,
+    // Commas as used in Latin, Sindhi, Chinese and various other scripts.
+    // see: https://en.wikipedia.org/wiki/Comma#Comma_variants
+    commas: /\u002C|\u060C|\uFE50|\uFE10|\uFE11|\u2E41|\u2E34|\u2E32|\uFF0C/g,
     // See: https://schema.org/Article
     jsonLdArticleTypes: /^Article|AdvertiserContentArticle|NewsArticle|AnalysisNewsArticle|AskPublicNewsArticle|BackgroundNewsArticle|OpinionNewsArticle|ReportageNewsArticle|ReviewNewsArticle|Report|SatiricalArticle|ScholarlyArticle|MedicalScholarlyArticle|SocialMediaPosting|BlogPosting|LiveBlogPosting|DiscussionForumPosting|TechArticle|APIReference$/,
     DATES_REGEXPS: [
       /([0-9]{4}[-\/]?((0[13-9]|1[012])[-\/]?(0[1-9]|[12][0-9]|30)|(0[13578]|1[02])[-\/]?31|02[-\/]?(0[1-9]|1[0-9]|2[0-8]))|([0-9]{2}(([2468][048]|[02468][48])|[13579][26])|([13579][26]|[02468][048]|0[0-9]|1[0-6])00)[-\/]?02[-\/]?29)/i,
       /(((0[13-9]|1[012])[-/]?(0[1-9]|[12][0-9]|30)|(0[13578]|1[02])[-/]?31|02[-/]?(0[1-9]|1[0-9]|2[0-8]))[-/]?[0-9]{4}|02[-/]?29[-/]?([0-9]{2}(([2468][048]|[02468][48])|[13579][26])|([13579][26]|[02468][048]|0[0-9]|1[0-6])00))/i,
-      /(((0[1-9]|[12][0-9]|30)[-/]?(0[13-9]|1[012])|31[-/]?(0[13578]|1[02])|(0[1-9]|1[0-9]|2[0-8])[-/]?02)[-/]?[0-9]{4}|29[-/]?02[-/]?([0-9]{2}(([2468][048]|[02468][48])|[13579][26])|([13579][26]|[02468][048]|0[0-9]|1[0-6])00))/i
-    ]
+      /(((0[1-9]|[12][0-9]|30)[-/]?(0[13-9]|1[012])|31[-/]?(0[13578]|1[02])|(0[1-9]|1[0-9]|2[0-8])[-/]?02)[-/]?[0-9]{4}|29[-/]?02[-/]?([0-9]{2}(([2468][048]|[02468][48])|[13579][26])|([13579][26]|[02468][048]|0[0-9]|1[0-6])00))/i,
+    ],
+    LONG_DATE_REGEXP: /^(Jan(uary)?|Feb(ruary)?|Mar(ch)?|Apr(il)?|May|Jun(e)?|Jul(y)?|Aug(ust)?|Sep(tember)?|Oct(ober)?|Nov(ember)?|Dec(ember)?)\s\d{1,2}(?:st|nd|rd|th)?(,)?\s\d{2,4}$/i,
+    CHINESE_DATE_REGEXP: /^\d{2,4}年\d{1,2}月\d{1,2}日$/,
   },
 
   UNLIKELY_ROLES: ["menu", "menubar", "complementary", "navigation", "alert", "alertdialog", "dialog"],
@@ -224,9 +264,9 @@ Readability.prototype = {
     "SUP", "TEXTAREA", "TIME", "VAR", "WBR"
   ],
 
-  // These are the classes that readability sets itself.
+  // These are the classes that we want to keep.
   CLASSES_TO_PRESERVE: [
-    "page", "twitter-tweet", "tweet-placeholder", "instagram-placeholder", "morning-brew-markets", "prism-code"
+    "page", "twitter-tweet", "tweet-placeholder", "instagram-placeholder", "morning-brew-markets", "prism-code", "tiktok-embed"
   ],
 
   // Classes of placeholder elements that can be empty but shouldn't be removed
@@ -263,7 +303,7 @@ Readability.prototype = {
 
     if (!this._keepClasses) {
       // Remove classes.
-      this._cleanClasses(articleContent);
+      this._cleanElement(articleContent);
     }
   },
 
@@ -416,7 +456,7 @@ Readability.prototype = {
    * @param Element
    * @return void
    */
-  _cleanClasses: function (node) {
+  _cleanElement: function (node) {
     if (node.className && node.className.startsWith && node.className.startsWith('_omnivore')) {
       return;
     }
@@ -443,8 +483,10 @@ Readability.prototype = {
       node.removeAttribute("class");
     }
 
+    this._removeAllEventHandlers(node)
+
     for (node = node.firstElementChild; node; node = node.nextElementSibling) {
-      this._cleanClasses(node);
+      this._cleanElement(node);
     }
   },
 
@@ -506,7 +548,6 @@ Readability.prototype = {
     this._forEachNode(medias, function (media) {
       var src = media.getAttribute("src");
       var poster = media.getAttribute("poster");
-      var srcset = media.getAttribute("srcset");
 
       if (src) {
         media.setAttribute("src", this.toAbsoluteURI(src));
@@ -516,6 +557,20 @@ Readability.prototype = {
         media.setAttribute("poster", this.toAbsoluteURI(poster));
       }
     });
+  },
+
+  // removes all the javascript event handlers from the supplied element
+  _removeAllEventHandlers(element) {
+    const attributes = element.attributes;
+
+    // Iterate in reverse because removing attributes changes the length
+    for (let i = attributes.length - 1; i >= 0; i--) {
+        const attribute = attributes[i];
+        // Check if the attribute starts with "on" (like "onload", "onerror", etc.)
+        if (attribute.name.startsWith('on')) {
+            element.removeAttribute(attribute.name);
+        }
+    }
   },
 
   /** Creates imageproxy links for all article images with href source */
@@ -1059,14 +1114,36 @@ Readability.prototype = {
     if (node.className === 'omnivore-published-date' && this._isValidPublishedDate(node.textContent)) {
       return new Date(node.textContent);
     }
+    // we don't want to check for dates in the URL's
+    if (node.tagName.toLowerCase() === 'a') return
+    // get the datetime from time element
+    if (node.tagName.toLowerCase() === 'time') {
+      const datetime = node.getAttribute('datetime')
+      if (datetime) {
+        const date = new Date(datetime)
+        if (!isNaN(date)) {
+          this._articlePublishedDate = date
+          return true
+        }
+      }
+    }
+        
     // Searching for the real date in the text content
-    let dateRegExpFound = this.REGEXPS.DATES_REGEXPS.find(regexp => regexp.test(node.textContent.trim()))
-    dateRegExpFound && (dateRegExpFound = dateRegExpFound.exec(node.textContent.trim()))
+    const content = node.textContent.trim()
+    let dateFound
+    const dateRegExpFound = this.REGEXPS.DATES_REGEXPS.find(regexp => regexp.test(content))
+    if (dateRegExpFound) {
+      dateFound = dateRegExpFound.exec(content)[0]
+    } else if (this.REGEXPS.LONG_DATE_REGEXP.test(content)) {
+      dateFound = this.REGEXPS.LONG_DATE_REGEXP.exec(content)[0].replace(/st|nd|rd|th/i, '')
+    } else if (this.REGEXPS.CHINESE_DATE_REGEXP.test(content)) {
+      dateFound = this.REGEXPS.CHINESE_DATE_REGEXP.exec(content)[0].replace(/年|月/g, '-').replace(/日/g, '')
+    }
 
     let publishedDateParsed
     try {
       // Trying to parse the Date from the content itself
-      publishedDateParsed = new Date(node.textContent.trim())
+      publishedDateParsed = new Date(content)
     } catch (error) { }
 
     if (
@@ -1074,13 +1151,15 @@ Readability.prototype = {
       ((this._someNodeAttribute(node, ({ value, name }) => {
         if (/href|uri|url/i.test(name)) return false;
         return this.REGEXPS.publishedDate.test(value)
-      }) || dateRegExpFound) || (/date/i.test(matchString) && !isNaN(publishedDateParsed)))
+      }) || dateFound) || (/date/i.test(matchString) && !isNaN(publishedDateParsed)))
       && this._isValidPublishedDate(node.textContent)
     ) {
       try {
-        if (isNaN(publishedDateParsed))
+        if (isNaN(publishedDateParsed)) {
           // Trying to parse the Date from the found by REGEXP string
-          publishedDateParsed = new Date(dateRegExpFound[0])
+          publishedDateParsed = new Date(dateFound)
+        }
+
         if (!isNaN(publishedDateParsed) && !this._articlePublishedDate)
           this._articlePublishedDate = publishedDateParsed
       }
@@ -1167,6 +1246,12 @@ Readability.prototype = {
 
         if (!this._isProbablyVisible(node)) {
           this.log("Removing hidden node - " + matchString);
+          node = this._removeAndGetNext(node);
+          continue;
+        }
+
+        // User is not able to see elements applied with both "aria-modal = true" and "role = dialog"
+        if (node.getAttribute("aria-modal") == "true" && node.getAttribute("role") == "dialog") {
           node = this._removeAndGetNext(node);
           continue;
         }
@@ -1324,8 +1409,8 @@ Readability.prototype = {
         // Add a point for the paragraph itself as a base.
         contentScore += 1;
 
-        // Add points for any commas (including those in CJK language) within this paragraph.
-        contentScore += innerText.split(/[,，、]/g).length;
+        // Add points for any commas within this paragraph.
+        contentScore += innerText.split(this.REGEXPS.commas).length;
 
         // For every 100 characters in this paragraph, add another point. Up to 3 points.
         contentScore += Math.min(Math.floor(innerText.length / 100), 3);
@@ -1485,7 +1570,7 @@ Readability.prototype = {
       if (isPaging)
         articleContent.id = "readability-content";
 
-      var siblingScoreThreshold = Math.max(10, (topCandidate.readability && topCandidate.readability.contentScore || 0) * 0.2);
+      var siblingScoreThreshold = Math.max(10, (topCandidate.readability?.contentScore || 0) * 0.2);
       // Keep potential top candidate's parent node to try to get text direction of it later.
       parentOfTopCandidate = topCandidate.parentNode;
       var siblings = parentOfTopCandidate.children;
@@ -1768,7 +1853,22 @@ Readability.prototype = {
           this.log(`Parsed after: `, {parsed: parsedArticleInfo})
         }
 
-        if (typeof parsedArticleInfo.name === "string") {
+        if (typeof parsedArticleInfo.name === "string" && typeof parsedArticleInfo.headline === "string" && parsedArticleInfo.name !== parsedArticleInfo.headline) {
+          // we have both name and headline element in the JSON-LD. They should both be the same but some websites like aktualne.cz
+          // put their own name into "name" and the article title to "headline" which confuses Readability. So we try to check if either
+          // "name" or "headline" closely matches the html title, and if so, use that one. If not, then we use "name" by default.
+
+          var title = this._getArticleTitle();
+          var nameMatches = this._textSimilarity(parsedArticleInfo.name, title) > 0.75;
+          var headlineMatches = this._textSimilarity(parsedArticleInfo.headline, title) > 0.75;
+
+          if (headlineMatches && !nameMatches) {
+            metadata.title = parsedArticleInfo.headline;
+          } else {
+            metadata.title = parsedArticleInfo.name;
+          }
+
+        } else if (typeof parsedArticleInfo.name === "string") {
           metadata.title = parsedArticleInfo.name.trim();
         } else if (typeof parsedArticleInfo.headline === "string") {
           metadata.title = parsedArticleInfo.headline.trim();
@@ -1835,7 +1935,8 @@ Readability.prototype = {
     var metaElements = this._doc.getElementsByTagName("meta");
 
     // property is a space-separated list of values
-    var propertyPattern = /\s*(dc|dcterm|og|twitter|article)\s*:\s*(locale|author|creator|description|title|site_name|published_time|published|date|image)\s*/gi;
+    var propertyPattern =
+      /\s*(dc|dcterm|og|twitter|article)\s*:\s*(locale|author|creator|description|title|site_name|published_time|published|date|image(?:$|\s|:url|:secure_url))\s*/gi;
 
     // name is a single value
     var namePattern = /^\s*(?:(dc|dcterm|og|twitter|weibo:(article|webpage))\s*[\.:]\s*)?(author|creator|description|title|site_name|date|image)\s*$/i;
@@ -1921,6 +2022,7 @@ Readability.prototype = {
     metadata.byline = jsonld.byline ||
       values["dc:creator"] ||
       values["dcterm:creator"] ||
+      values["og:article:author"] ||
       values["author"];
 
     // get description
@@ -1967,14 +2069,14 @@ Readability.prototype = {
       values["article:date"];
 
     // get preview image
-    metadata.previewImage = jsonld.previewImage ||
-      values["image"] ||
+    metadata.previewImage = values["image"] ||
       values["twitter:image"] ||
       values["dc:image"] ||
       values["dcterm:image"] ||
       values["og:image"] ||
       values["weibo:article:image"] ||
-      values["weibo:webpage:image"];
+      values["weibo:webpage:image"] || 
+      jsonld.previewImage;
 
     metadata.locale = values["og:locale"];
 
@@ -2112,12 +2214,7 @@ Readability.prototype = {
    * @param Element
    **/
   _removeScripts: function (doc) {
-    this._removeNodes(this._getAllNodesWithTag(doc, ["script"]), function (scriptNode) {
-      scriptNode.nodeValue = "";
-      scriptNode.removeAttribute("src");
-      return true;
-    });
-    this._removeNodes(this._getAllNodesWithTag(doc, ["noscript"]));
+    this._removeNodes(this._getAllNodesWithTag(doc, ["script", "noscript"]));
   },
 
   /**
@@ -2375,6 +2472,10 @@ Readability.prototype = {
    * @return number (float)
    **/
   _getLinkDensity: function(element) {
+    // If we are ignoring link density (often we do this for newsletters, just set it to zero so all link density checks pass)
+    if (this._ignoreLinkDensity) {
+      return 0
+    }
     var textLength = this._getInnerText(element).length;
     if (textLength === 0)
       return 0;
@@ -2756,7 +2857,7 @@ Readability.prototype = {
       var contentScore = 0;
 
       if (weight + contentScore < 0) {
-        this.log("Cleaning Conditionally by weight", { node, className: node.className, children: Array.from(node.children).map(ch => ch.tagName)});
+        this.log("Cleaning Conditionally by weight", { text: node.innerText, className: node.className, children: Array.from(node.children).map(ch => ch.tagName)});
         return true;
       }
 
@@ -2789,8 +2890,12 @@ Readability.prototype = {
           embedCount++;
         }
 
+        var innerText = this._getInnerText(node)
         var linkDensity = this._getLinkDensity(node);
-        var contentLength = this._getInnerText(node).length;
+        var contentLength = innerText.length;
+
+        const emojiRegex = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu;
+        const textHasEmoji = Array.from(innerText.matchAll(emojiRegex)).length > 0
 
         if (hasTweetInChildren(node)) {
           return false;
@@ -2806,7 +2911,7 @@ Readability.prototype = {
           (img > 1 && p / img < 0.5 && !this._hasAncestorTag(node, "figure")) ||
           (!isList && li > p) ||
           (input > Math.floor(p/3)) ||
-          (!isList && headingDensity < 0.9 && contentLength < 25 && (img === 0 || img > 2) && !this._hasAncestorTag(node, "figure")) ||
+          (!isList && headingDensity < 0.9 && contentLength < 25 && !textHasEmoji && (img === 0 || img > 2) && !this._hasAncestorTag(node, "figure")) ||
           // ignores link density for the links inside the .post-body div (the main content)
           (!isList && weight < 25 && linkDensity > 0.2 && !(this.CLASSES_TO_SKIP.some((c) => parentClasses.contains(c))) )||
           // some website like https://substack.com might have their custom styling of tweets
@@ -2945,17 +3050,23 @@ Readability.prototype = {
     return false;
   },
 
-  _getLanguage: function(code) {
-    if (!code) {
-      // Default to English
-      return 'English';
-    }
-
+  _getLanguage: async function(content, locale, languageCode) {
     try {
+      let code = locale || languageCode.replace('_', '-') || 'en';
+
+      // detect language from the html content
+      const languages = (await cld.detect(content, { isHTML: true })).languages;
+      this.log('Detected languages: ', languages);
+      if (languages.length > 0) {
+        code = languages[0].code;
+      }
+
+      this.log('Getting language name from code: ', code);
       let lang = new Intl.DisplayNames(['en'], {type: 'language'});
-      return lang.of(code.split('_')[0]);
-    } catch {
-      return 'English'
+      return lang.of(code);
+    } catch (error) {
+      this.log('Failed to get language', error);
+      return 'English';
     }
   },
 
@@ -3000,18 +3111,27 @@ Readability.prototype = {
       return null;
 
     const byline = metadata.byline || this._articleByline;
-    const [author, publishedAt] = extractPublishedDateFromAuthor(byline);
+    const [author, publishedDateFromAuthor] = extractPublishedDateFromAuthor(byline);
+    const publishedDate = metadata.publishedDate || 
+      extractPublishedDateFromUrl(this._documentURI) || 
+      publishedDateFromAuthor || 
+      this._articlePublishedDate;
 
     this._postProcessContent(articleContent);
 
     // If we haven't found an excerpt in the article's metadata, use the article's
-    // first paragraph as the excerpt. This is used for displaying a preview of
+    // first meaningful paragraph (more than 50 characters) as the excerpt. This is used for displaying a preview of
     // the article's content.
     if (!metadata.excerpt) {
       var paragraphs = articleContent.getElementsByTagName("p");
-      if (paragraphs.length > 0) {
-        metadata.excerpt = paragraphs[0].textContent.trim();
-      }
+      for (const p of paragraphs) {
+        const text = p.textContent.trim();
+
+        if (text.length > 50) {
+          metadata.excerpt = text;
+          break;
+        }
+      };
     }
     if (!metadata.siteName) {
       // Fallback to hostname
@@ -3024,20 +3144,23 @@ Readability.prototype = {
     }
 
     var textContent = articleContent.textContent;
+    const content = this._serializer(articleContent);
+    const language = await this._getLanguage(content, metadata.locale, this._languageCode);
     return {
       title: this._articleTitle,
       // remove \n and extra spaces and trim the string
       byline: author ? author.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim() : null,
       dir: this._articleDir,
-      content: this._serializer(articleContent),
+      content,
       textContent: textContent,
       length: textContent.length,
       excerpt: metadata.excerpt,
       siteName: metadata.siteName,
       siteIcon: metadata.siteIcon,
       previewImage: metadata.previewImage,
-      publishedDate: metadata.publishedDate || publishedAt || this._articlePublishedDate,
-      language: this._getLanguage(metadata.locale || this._languageCode),
+      publishedDate,
+      language,
+      documentElement: articleContent,
     };
   }
 };

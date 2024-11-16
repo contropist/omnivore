@@ -1,6 +1,8 @@
-import { PubSub } from '@google-cloud/pubsub'
 import { GetSignedUrlConfig, Storage } from '@google-cloud/storage'
+import { RedisDataSource } from '@omnivore/utils'
 import * as Sentry from '@sentry/serverless'
+import 'dotenv/config'
+import { queueUpdatePageJob, State } from './job'
 import { parsePdf } from './pdf'
 
 Sentry.GCPFunction.init({
@@ -8,9 +10,7 @@ Sentry.GCPFunction.init({
   tracesSampleRate: 0,
 })
 
-const pubsub = new PubSub()
 const storage = new Storage()
-const CONTENT_UPDATE_TOPIC = 'updatePageContent'
 
 interface StorageEventData {
   bucket: string
@@ -45,29 +45,28 @@ const getDocumentUrl = async (
     const [url] = await file.getSignedUrl(options)
     return new URL(url)
   } catch (e) {
-    console.debug('error getting signed url', e)
     return undefined
   }
 }
 
-export const updatePageContent = (
+export const updatePageContent = async (
+  redisDataSource: RedisDataSource,
   fileId: string,
-  content: string,
+  content?: string,
   title?: string,
   author?: string,
-  description?: string
+  description?: string,
+  state?: State
 ): Promise<string | undefined> => {
-  return pubsub
-    .topic(CONTENT_UPDATE_TOPIC)
-    .publish(
-      Buffer.from(
-        JSON.stringify({ fileId, content, title, author, description })
-      )
-    )
-    .catch((err) => {
-      console.error('error publishing conentUpdate:', err)
-      return undefined
-    })
+  const job = await queueUpdatePageJob(redisDataSource, {
+    fileId,
+    content,
+    title,
+    author,
+    description,
+    state,
+  })
+  return job.id
 }
 
 const getStorageEventData = (
@@ -91,45 +90,80 @@ export const pdfHandler = Sentry.GCPFunction.wrapHttpFunction(
     if ('message' in req.body && 'data' in req.body.message) {
       const pubSubMessage = req.body.message.data as string
       const data = getStorageEventData(pubSubMessage)
-      if (data) {
-        try {
-          if (shouldHandle(data)) {
-            console.log('handling pdf data', data)
-
-            const url = await getDocumentUrl(data)
-            console.log('PDF url: ', url)
-            if (!url) {
-              console.log('Could not fetch PDF', data.bucket, data.name)
-              return res.status(404).send('Could not fetch PDF')
-            }
-
-            const parsed = await parsePdf(url)
-            const result = await updatePageContent(
-              data.name,
-              parsed.content,
-              parsed.title,
-              parsed.author,
-              parsed.description
-            )
-            console.log(
-              'publish result',
-              result,
-              'title',
-              parsed.title,
-              'author',
-              parsed.author
-            )
-          } else {
-            console.log('not handling pdf data', data)
-          }
-        } catch (err) {
-          console.log('error handling event', { err, data })
-          return res.status(500).send('Error handling event')
-        }
+      if (!data) {
+        console.log('no data found in pubsub message')
+        return res.send('ok')
       }
-    } else {
-      console.log('no pubsub message')
+
+      if (!shouldHandle(data)) {
+        console.log('not handling pdf data', data)
+        return res.send('ok')
+      }
+
+      let content,
+        title,
+        author,
+        description,
+        state: State = 'SUCCEEDED' // Default to succeeded even if we fail to parse
+
+      const redisDataSource = new RedisDataSource({
+        cache: {
+          url: process.env.REDIS_URL,
+          cert: process.env.REDIS_CERT,
+        },
+        mq: {
+          url: process.env.MQ_REDIS_URL,
+          cert: process.env.MQ_REDIS_CERT,
+        },
+      })
+
+      try {
+        const url = await getDocumentUrl(data)
+        console.log('PDF url: ', url)
+        if (!url) {
+          console.log('Could not fetch PDF', data.bucket, data.name)
+          // If we can't fetch the PDF, mark it as failed
+          state = 'FAILED'
+
+          return res.status(404).send('Could not fetch PDF')
+        }
+
+        // Parse the PDF to update the content and metadata
+        const parsed = await parsePdf(url)
+        content = parsed.content
+        title = parsed.title
+        author = parsed.author
+        description = parsed.description
+      } catch (err) {
+        console.log('error parsing pdf', { err, data })
+
+        return res.status(500).send('Error parsing pdf')
+      } finally {
+        // Always update the state, even if we fail to parse
+        const result = await updatePageContent(
+          redisDataSource,
+          data.name,
+          content,
+          title,
+          author,
+          description,
+          state
+        )
+        console.log(
+          'publish result',
+          result,
+          'title',
+          title,
+          'author',
+          author,
+          'state',
+          state
+        )
+
+        await redisDataSource.shutdown()
+      }
     }
+
     res.send('ok')
   }
 )

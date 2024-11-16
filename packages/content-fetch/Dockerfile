@@ -1,29 +1,19 @@
-FROM node:14.18-alpine
+FROM node:18.16
+LABEL org.opencontainers.image.source="https://github.com/omnivore-app/omnivore"
 
-# Installs latest Chromium (92) package.
-RUN apk add --no-cache \
-      chromium \
-      nss \
-      freetype \
-      harfbuzz \
-      ca-certificates \
-      ttf-freefont \
-      nodejs \
-      yarn \
-      g++ \
-      make \
-      python3
+# Installs latest Chromium package.
+RUN apt-get update && apt-get install -y \
+    chromium \
+    ca-certificates \
+    nodejs \
+    yarn \
+    g++ \
+    make \
+    python3
 
-# Add user so we don't need --no-sandbox.
-RUN addgroup -S pptruser && adduser -S -g pptruser pptruser \
-    && mkdir -p /home/pptruser/Downloads /app \
-    && chown -R pptruser:pptruser /home/pptruser \
-    && chown -R pptruser:pptruser /app
-
-# Run everything after as non-privileged user.
 WORKDIR /app
 
-ENV CHROMIUM_PATH /usr/bin/chromium-browser
+ENV CHROMIUM_PATH /usr/bin/chromium
 ENV LAUNCH_HEADLESS=true
 
 COPY package.json .
@@ -32,17 +22,21 @@ COPY tsconfig.json .
 COPY .prettierrc .
 COPY .eslintrc .
 
-COPY /packages/readabilityjs/package.json ./packages/readabilityjs/package.json
+COPY /packages/content-fetch/package.json ./packages/content-fetch/package.json
 COPY /packages/content-handler/package.json ./packages/content-handler/package.json
 COPY /packages/puppeteer-parse/package.json ./packages/puppeteer-parse/package.json
+COPY /packages/utils/package.json ./packages/utils/package.json
 
 RUN yarn install --pure-lockfile
 
 ADD /packages/content-fetch ./packages/content-fetch
 ADD /packages/content-handler ./packages/content-handler
 ADD /packages/puppeteer-parse ./packages/puppeteer-parse
-ADD /packages/readabilityjs ./packages/readabilityjs
+ADD /packages/utils ./packages/utils
+RUN yarn workspace @omnivore/utils build
 RUN yarn workspace @omnivore/content-handler build
+RUN yarn workspace @omnivore/puppeteer-parse build
+RUN yarn workspace @omnivore/content-fetch build
 
 # After building, fetch the production dependencies
 RUN rm -rf /app/packages/content-fetch/node_modules

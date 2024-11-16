@@ -11,176 +11,265 @@ public enum GridCardAction {
 }
 
 public struct GridCard: View {
-  @Binding var isContextMenuOpen: Bool
-  let item: LinkedItem
-  let actionHandler: (GridCardAction) -> Void
-  let tapAction: () -> Void
+  @ObservedObject var item: Models.LibraryItem
+  let savedAtStr: String
 
   public init(
-    item: LinkedItem,
-    isContextMenuOpen: Binding<Bool>,
-    actionHandler: @escaping (GridCardAction) -> Void,
-    tapAction: @escaping () -> Void
+    item: Models.LibraryItem
   ) {
     self.item = item
-    self._isContextMenuOpen = isContextMenuOpen
-    self.actionHandler = actionHandler
-    self.tapAction = tapAction
+    self.savedAtStr = savedDateString(item.savedAt)
   }
 
-  // Menu doesn't provide an API to observe it's open state
-  // so we have keep track of it's state manually
-  func tapHandler() {
-    if isContextMenuOpen {
-      isContextMenuOpen = false
-    } else {
-      tapAction()
-    }
-  }
+  var imageBox: some View {
+    GeometryReader { geo in
 
-  func menuActionHandler(_ action: GridCardAction) {
-    isContextMenuOpen = false
-    actionHandler(action)
-  }
+      ZStack(alignment: .bottomLeading) {
+        if let imageURL = item.imageURL {
+          CachedAsyncImage(url: imageURL) { phase in
+            switch phase {
+            case .empty:
+              Color.clear
+                .frame(maxWidth: .infinity, maxHeight: geo.size.height)
+            case let .success(image):
+              image.resizable()
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: geo.size.height)
+                .clipped()
+            case .failure:
+              fallbackImage
 
-  var contextMenuView: some View {
-    Group {
-      Button(
-        action: { menuActionHandler(.viewHighlights) },
-        label: { Label("Notebook", systemImage: "highlighter") }
-      )
-      Button(
-        action: { menuActionHandler(.editTitle) },
-        label: { Label("Edit Info", systemImage: "info.circle") }
-      )
-      Button(
-        action: { menuActionHandler(.editLabels) },
-        label: { Label(item.labels?.count == 0 ? "Add Labels" : "Edit Labels", systemImage: "tag") }
-      )
-      Button(
-        action: { menuActionHandler(.toggleArchiveStatus) },
-        label: {
-          Label(
-            item.isArchived ? "Unarchive" : "Archive",
-            systemImage: item.isArchived ? "tray.and.arrow.down.fill" : "archivebox"
-          )
+            @unknown default:
+              // Since the AsyncImagePhase enum isn't frozen,
+              // we need to add this currently unused fallback
+              // to handle any new cases that might be added
+              // in the future:
+              Color.clear
+                .frame(maxWidth: .infinity, maxHeight: geo.size.height)
+            }
+          }
+        } else {
+          fallbackImage
         }
-      )
-      Button(
-        action: { menuActionHandler(.delete) },
-        label: { Label("Delete", systemImage: "trash") }
-      )
+        Color(hex: "#D9D9D9")?.opacity(0.65).frame(width: geo.size.width, height: 5)
+        Color(hex: "#FFD234").frame(width: geo.size.width * (item.readingProgress / 100), height: 5)
+      }
     }
+    .cornerRadius(5)
+  }
+
+  var fallbackFont: Font {
+    if let uifont = UIFont(name: "Futura Bold", size: 16) {
+      return Font(uifont)
+    }
+    return Font.system(size: 16)
+  }
+
+  var fallbackImage: some View {
+    GeometryReader { geo in
+      HStack {
+        Text(item.title ?? "")
+          .font(fallbackFont)
+          .frame(alignment: .center)
+          .multilineTextAlignment(.leading)
+          .lineLimit(2)
+          .padding(10)
+          .foregroundColor(Color.thFallbackImageForeground)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Color.thFallbackImageBackground)
+      .frame(width: geo.size.width, height: geo.size.height)
+    }
+  }
+
+  var bylineStr: String {
+    // It seems like it could be cleaner just having author, instead of
+    // concating, maybe we fall back
+    if let author = item.author {
+      return author
+    } else if let publisherDisplayName = item.publisherDisplayName {
+      return publisherDisplayName
+    }
+
+    return ""
+  }
+
+  var byLine: some View {
+    if let origin = cardSiteName(item.pageURLString) {
+      Text(bylineStr + " | " + origin)
+        .font(.caption2)
+        .foregroundColor(Color.themeLibraryItemSubtle)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lineLimit(1)
+    } else {
+      Text(bylineStr)
+        .font(.caption2)
+        .foregroundColor(Color.themeLibraryItemSubtle)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lineLimit(1)
+    }
+  }
+
+  var readingSpeed: Int64 {
+    var result = UserDefaults.standard.integer(forKey: UserDefaultKey.userWordsPerMinute.rawValue)
+    if result <= 0 {
+      result = 235
+    }
+    return Int64(result)
+  }
+
+  var estimatedReadingTime: String {
+    if item.wordsCount > 0 {
+      let readLen = max(1, item.wordsCount / readingSpeed)
+      return "\(readLen) MIN READ • "
+    }
+    return ""
+  }
+
+  var readingProgress: String {
+    // If there is no wordsCount don't show progress because it will make no sense
+    if item.wordsCount > 0 {
+      return "\(String(format: "%d", Int(item.readingProgress)))%"
+    }
+    if item.isPDF {
+      // base estimated reading time on page count
+      return "\(String(format: "%d", Int(item.readingProgress)))%"
+    }
+    return ""
+  }
+
+  var hasMultipleInfoItems: Bool {
+    item.wordsCount > 0 || item.highlights?.first { ($0 as? Highlight)?.annotation != nil } != nil
+  }
+
+  var highlightsText: String {
+    if let highlights = item.highlights, highlights.count > 0 {
+      let fmted = LocalText.pluralizedText(key: "number_of_highlights", count: highlights.count)
+      if item.wordsCount > 0 || item.isPDF {
+        return " • \(fmted)"
+      }
+      return fmted
+    }
+    return ""
+  }
+
+  var notesText: String {
+    let notes = item.highlights?.filter { item in
+      if let highlight = item as? Highlight {
+        return !(highlight.annotation ?? "").isEmpty
+      }
+      return false
+    }
+
+    if let notes = notes, notes.count > 0 {
+      let fmted = LocalText.pluralizedText(key: "number_of_notes", count: notes.count)
+      if hasMultipleInfoItems {
+        return " • \(fmted)"
+      }
+      return fmted
+    }
+    return ""
+  }
+
+  var flairLabels: [FlairLabels] {
+    item.sortedLabels.compactMap { label in
+      if let name = label.name {
+        return FlairLabels(rawValue: name.lowercased())
+      }
+      return nil
+    }.sorted { $0.sortOrder < $1.sortOrder }
+  }
+
+  var isPartiallyRead: Bool {
+    Int(item.readingProgress) > 0
+  }
+
+  var nonFlairLabels: [LinkedItemLabel] {
+    item.sortedLabels.filter { label in
+      if let name = label.name, FlairLabels(rawValue: name.lowercased()) != nil {
+        return false
+      }
+      return true
+    }
+  }
+
+  var readInfo: some View {
+    HStack(alignment: .center, spacing: 5.0) {
+      ForEach(flairLabels, id: \.self) {
+        $0.icon
+      }
+
+      Text(savedAtStr)
+        .font(.footnote)
+        .foregroundColor(Color.themeLibraryItemSubtle)
++
+      Text("\(estimatedReadingTime)")
+        .font(.caption2).fontWeight(.medium)
+        .foregroundColor(Color.themeLibraryItemSubtle)
+
+        +
+        Text("\(readingProgress)")
+        .font(.caption2).fontWeight(.medium)
+        .foregroundColor(isPartiallyRead ? Color.appGreenSuccess : Color.themeLibraryItemSubtle)
+
+        +
+        Text("\(highlightsText)")
+        .font(.caption2).fontWeight(.medium)
+        .foregroundColor(Color.themeLibraryItemSubtle)
+
+        +
+        Text("\(notesText)")
+        .font(.caption2).fontWeight(.medium)
+        .foregroundColor(Color.themeLibraryItemSubtle)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   public var body: some View {
     GeometryReader { geo in
       VStack(alignment: .leading, spacing: 0) {
-        // Progress Bar
-        Group {
-          ProgressView(value: min(abs(item.readingProgress) / 100, 1))
-            .tint(.appYellow48)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.bottom, 16)
-        }
-        .onTapGesture { tapHandler() }
-
         VStack {
-          // Title, Subtitle, Menu Button
+          imageBox
+            .frame(height: geo.size.height / 2.0)
+
           VStack(alignment: .leading, spacing: 4) {
-            HStack {
-              Text(item.unwrappedTitle)
-                .font(.appHeadline)
-                .foregroundColor(.appGrayTextContrast)
-                .lineLimit(1)
-                .onTapGesture { tapHandler() }
-              Spacer()
+            readInfo
+              .dynamicTypeSize(.xSmall ... .medium)
+              .padding(.horizontal, 15)
 
-              Menu(
-                content: { contextMenuView },
-                label: { Image(systemName: "ellipsis").padding() }
-              )
-              .frame(width: 16, height: 16, alignment: .center)
-              .onTapGesture { isContextMenuOpen = true }
-            }
+            Text(item.title ?? "")
+              .lineLimit(2)
+              .font(.appHeadline)
+              .foregroundColor(.appGrayTextContrast)
+              .padding(.horizontal, 15)
 
-            HStack {
-              if let author = item.author {
-                Text("by \(author)")
-                  .font(.appCaptionTwo)
-                  .foregroundColor(.appGrayText)
-                  .lineLimit(1)
-              }
-
-              if let publisherDisplayName = item.publisherDisplayName {
-                Text(publisherDisplayName)
-                  .font(.appCaptionTwo)
-                  .foregroundColor(.appGrayText)
-                  .lineLimit(1)
-              }
-
-              Spacer()
-            }
-            .onTapGesture { tapHandler() }
+            byLine
+              .padding(.horizontal, 15)
           }
-          .frame(height: 30)
-          .padding(.horizontal)
-          .padding(.bottom, 16)
+          .padding(.bottom, 10)
+          .padding(.top, 10)
 
           // Link description and image
           HStack(alignment: .top) {
-            Text(item.descriptionText ?? item.unwrappedTitle)
+            Text(item.descriptionText ?? item.title ?? "")
               .font(.appSubheadline)
               .foregroundColor(.appGrayTextContrast)
-              .lineLimit(nil)
+              .lineLimit(2)
               .multilineTextAlignment(.leading)
 
             Spacer()
-
-            if let imageURL = item.imageURL {
-              AsyncImage(url: imageURL) { phase in
-                if let image = phase.image {
-                  image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: geo.size.width / 3, height: (geo.size.width * 2) / 9)
-                    .cornerRadius(3)
-                } else if phase.error != nil {
-                  EmptyView()
-                } else {
-                  Color.appButtonBackground
-                    .frame(width: geo.size.width / 3, height: (geo.size.width * 2) / 9)
-                    .cornerRadius(3)
-                }
-              }
-            }
           }
-          .padding(.horizontal)
-          .onTapGesture { tapHandler() }
+          .padding(.horizontal, 15)
 
-          // Category Labels
-          if item.hasLabels {
-            ScrollView(.horizontal, showsIndicators: false) {
-              HStack {
-                ForEach(item.sortedLabels, id: \.self) {
-                  TextChip(feedItemLabel: $0)
-                }
-                Spacer()
-              }
-              .padding(.horizontal)
-            }
-            .onTapGesture { tapHandler() }
-          }
-
-          if let status = item.serverSyncStatus, status != ServerSyncStatus.isNSync.rawValue {
-            SyncStatusIcon(status: ServerSyncStatus(rawValue: Int(status)) ?? ServerSyncStatus.isNSync)
+          if !nonFlairLabels.isEmpty {
+            LabelsFlowLayout(labels: nonFlairLabels)
+              .padding(.horizontal, 15)
           }
         }
         .padding(.horizontal, 0)
         .padding(.top, 0)
-        .padding(.bottom, 8)
       }
-      .contextMenu { contextMenuView }
     }
   }
 }

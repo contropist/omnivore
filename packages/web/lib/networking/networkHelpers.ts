@@ -1,6 +1,6 @@
 import { GraphQLClient } from 'graphql-request'
-import { gqlEndpoint, fetchEndpoint } from '../appConfig'
 import { IncomingMessage } from 'http'
+import { fetchEndpoint, gqlEndpoint } from '../appConfig'
 
 declare type RequestCookies = {
   [key: string]: string
@@ -12,24 +12,21 @@ export type RequestContext = {
   }
 }
 
-type RequestHeaders = {
-  authorization?: string
-  pendingUserAuth?: string
-}
-
-function requestHeaders(): RequestHeaders {
+export function requestHeaders(): Record<string, string> {
   const authToken = window?.localStorage.getItem('authToken') || undefined
   const pendingAuthToken =
     window?.localStorage.getItem('pendingUserAuth') || undefined
 
   if (authToken) {
     return {
+      'X-OmnivoreClient': 'web',
       authorization: authToken,
     }
   }
 
   if (pendingAuthToken) {
     return {
+      'X-OmnivoreClient': 'web',
       pendingUserAuth: pendingAuthToken,
     }
   }
@@ -57,21 +54,53 @@ export function gqlFetcher(
     credentials: 'include',
     mode: 'cors',
   })
+
   return graphQLClient.request(query, variables, requestHeaders())
 }
 
+export function apiFetcher(path: string): Promise<unknown> {
+  const url = new URL(path, fetchEndpoint)
+  return fetch(url.toString(), {
+    headers: requestHeaders(),
+    credentials: 'include',
+    mode: 'cors',
+  }).then((result) => {
+    return result.json()
+  })
+}
+
+export function apiPoster(
+  path: string,
+  body: any,
+  method = 'POST'
+): Promise<Response> {
+  const url = new URL(path, fetchEndpoint)
+  return fetch(url.toString(), {
+    method: method,
+    credentials: 'include',
+    mode: 'cors',
+    headers: {
+      'Content-Type': 'application/json',
+      ...requestHeaders(),
+    },
+    body: JSON.stringify(body),
+  })
+}
+
 export function makePublicGqlFetcher(
+  gql: string,
   variables?: unknown
 ): (query: string) => Promise<unknown> {
-  return (query: string) => gqlFetcher(query, variables, false)
+  return (query: string) => gqlFetcher(gql, variables, false)
 }
 
 // Partially apply gql variables to the request
 // This avoids using an object for the swr cache key
 export function makeGqlFetcher(
+  gql: string,
   variables?: unknown
 ): (query: string) => Promise<unknown> {
-  return (query: string) => gqlFetcher(query, variables, true)
+  return (query: string) => gqlFetcher(gql, variables, true)
 }
 
 export function ssrFetcher(

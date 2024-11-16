@@ -28,7 +28,7 @@ export default function Api(): JSX.Element {
   const neverExpiresDate = new Date(8640000000000000)
   const defaultExpiresAt = 'Never'
 
-  applyStoredTheme(false)
+  applyStoredTheme()
 
   async function onDelete(id: string): Promise<void> {
     const result = await revokeApiKeyMutation(id)
@@ -65,7 +65,6 @@ export default function Api(): JSX.Element {
         name: 'expiredAt',
         required: true,
         onChange: (e) => {
-          console.log('onChange: ', e)
           let additionalDays = 0
           switch (e.target.value) {
             case 'in 7 days':
@@ -114,7 +113,7 @@ export default function Api(): JSX.Element {
       pageId="api-keys"
       pageInfoLink="https://docs.omnivore.app/integrations/api.html"
       headerTitle="API Keys"
-      createTitle="Generate API Key"
+      createTitle="Create an API Key"
       createAction={() => {
         onAdd()
         setName('')
@@ -163,7 +162,7 @@ export default function Api(): JSX.Element {
 
       {addModalOpen && (
         <FormModal
-          title={'Generate API Key'}
+          title={'Create an API Key'}
           onSubmit={onCreate}
           onOpenChange={setAddModalOpen}
           inputs={formInputs}

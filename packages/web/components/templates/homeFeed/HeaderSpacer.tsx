@@ -1,13 +1,16 @@
 import { Box } from '../../elements/LayoutPrimitives'
 
-export const HEADER_HEIGHT = '70px'
+export const DEFAULT_HEADER_HEIGHT = '85px'
 
 export function HeaderSpacer(): JSX.Element {
   return (
     <Box
       css={{
-        height: HEADER_HEIGHT,
+        height: DEFAULT_HEADER_HEIGHT,
         bg: '$grayBase',
+        '@mdDown': {
+          height: DEFAULT_HEADER_HEIGHT,
+        },
       }}
     ></Box>
   )

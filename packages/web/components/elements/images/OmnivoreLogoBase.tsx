@@ -1,8 +1,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/router'
-import { ReactChildren } from 'react'
-import { config } from '../../tokens/stitches.config'
-
+import { DEFAULT_HOME_PATH } from '../../../lib/navigations'
+import { Box } from '../LayoutPrimitives'
 export type OmnivoreLogoBaseProps = {
   color?: string
   href?: string
@@ -11,32 +10,37 @@ export type OmnivoreLogoBaseProps = {
 }
 
 export function OmnivoreLogoBase(props: OmnivoreLogoBaseProps): JSX.Element {
-  const href = props.href || '/home'
   const router = useRouter()
 
   return (
-    <Link passHref href={href}>
-      <a
-        style={{
-          textDecoration: 'none',
-          display: 'flex',
-          alignItems: 'center',
-        }}
-        onClick={(event) => {
-          const query = window.sessionStorage.getItem('q')
-          if (query) {
-            console.log(
-              'going to: ',
-              window.sessionStorage.getItem('q'),
-              props.href
-            )
-            router.push(`/home?${query}`)
-            event.preventDefault()
-          }
-        }}
-      >
-        {props.children}
-      </a>
-    </Link>
+    <Box
+      style={{
+        textDecoration: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        cursor: 'pointer',
+      }}
+      onClick={(event) => {
+        if (props.href) {
+          router.push(props.href)
+          return
+        }
+        const navReturn = window.localStorage.getItem('nav-return')
+        if (navReturn) {
+          router.push(navReturn)
+          return
+        }
+        const query = window.sessionStorage.getItem('q')
+        if (query) {
+          router.push(`${DEFAULT_HOME_PATH}?${query}`)
+        } else {
+          router.push(DEFAULT_HOME_PATH)
+        }
+      }}
+      tabIndex={-1}
+      aria-label="Omnivore logo"
+    >
+      {props.children}
+    </Box>
   )
 }

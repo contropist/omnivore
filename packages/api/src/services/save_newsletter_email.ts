@@ -1,17 +1,13 @@
-import { MulticastMessage } from 'firebase-admin/messaging'
-import { createPubSubClient } from '../datalayer/pubsub'
-import { updatePage } from '../elastic/pages'
-import { Page } from '../elastic/types'
-import { NewsletterEmail } from '../entity/newsletter_email'
-import { UserDeviceToken } from '../entity/user_device_tokens'
+import {
+  EXISTING_NEWSLETTER_FOLDER,
+  NewsletterEmail,
+} from '../entity/newsletter_email'
+import { Subscription } from '../entity/subscription'
 import { env } from '../env'
-import { ContentReader } from '../generated/graphql'
 import { analytics } from '../utils/analytics'
-import { isBase64Image } from '../utils/helpers'
-import { fetchFavicon } from '../utils/parser'
-import { addLabelToPage } from './labels'
-import { SaveContext, saveEmail, SaveEmailInput } from './save_email'
-import { saveSubscription } from './subscriptions'
+import { logger } from '../utils/logger'
+import { saveEmail, SaveEmailInput } from './save_email'
+import { getSubscriptionByName } from './subscriptions'
 
 export interface NewsletterMessage {
   email: string
@@ -27,13 +23,13 @@ export interface NewsletterMessage {
 
 // Returns true if the link was created successfully. Can still fail to
 // send the push but that is ok and we wont retry in that case.
-export const saveNewsletterEmail = async (
+export const saveNewsletter = async (
   data: NewsletterMessage,
   newsletterEmail: NewsletterEmail,
-  ctx?: SaveContext
+  existingSubscription?: Subscription
 ): Promise<boolean> => {
-  analytics.track({
-    userId: newsletterEmail.user.id,
+  analytics.capture({
+    distinctId: newsletterEmail.user.id,
     event: 'newsletter_email_received',
     properties: {
       url: data.url,
@@ -44,111 +40,41 @@ export const saveNewsletterEmail = async (
   })
 
   if (!data.content) {
-    console.log('newsletter not created, no content:', data.email)
+    logger.info(`newsletter not created, no content: ${data.email}`)
     return false
   }
 
-  const saveCtx = ctx || {
-    pubsub: createPubSubClient(),
-    uid: newsletterEmail.user.id,
+  // find existing subscription if not provided
+  if (!existingSubscription) {
+    existingSubscription =
+      (await getSubscriptionByName(data.author, newsletterEmail.user.id)) ||
+      undefined
   }
+
+  // subscription's folder takes precedence over newsletter email's folder
+  const folder =
+    existingSubscription?.folder ||
+    newsletterEmail.folder ||
+    EXISTING_NEWSLETTER_FOLDER
+
   const input: SaveEmailInput = {
+    userId: newsletterEmail.user.id,
     url: data.url,
     originalContent: data.content,
     title: data.title,
     author: data.author,
     unsubMailTo: data.unsubMailTo,
     unsubHttpUrl: data.unsubHttpUrl,
+    newsletterEmailId: newsletterEmail.id,
+    receivedEmailId: data.receivedEmailId,
+    folder,
   }
-  const page = await saveEmail(saveCtx, input)
-  if (!page) {
-    console.log('newsletter not created:', input.title)
+  const savedLibraryItem = await saveEmail(input)
+  if (!savedLibraryItem) {
+    logger.info(`newsletter not created: ${input.title}`)
 
     return false
   }
 
-  if (!page.siteIcon || isBase64Image(page.siteIcon)) {
-    // fetch favicon if not already set or is a base64 image
-    const favicon = await fetchFavicon(page.url)
-    if (favicon) {
-      page.siteIcon = favicon
-      await updatePage(page.id, { siteIcon: favicon }, saveCtx)
-    }
-  }
-
-  // creates or updates subscription only if their is a valid unsubscribe link
-  if (data.unsubMailTo || data.unsubHttpUrl) {
-    const subscriptionId = await saveSubscription({
-      userId: newsletterEmail.user.id,
-      name: data.author,
-      newsletterEmail,
-      unsubscribeMailTo: data.unsubMailTo,
-      unsubscribeHttpUrl: data.unsubHttpUrl,
-      icon: page.siteIcon,
-    })
-    console.log('subscription saved', subscriptionId)
-  }
-
-  // adds newsletters label to page
-  const result = await addLabelToPage(saveCtx, page.id, {
-    name: 'Newsletter',
-    color: '#07D2D1',
-  })
-  console.log('newsletter label added:', result)
-
-  // // sends push notification
-  // const deviceTokens = await getDeviceTokensByUserId(newsletterEmail.user.id)
-  // if (!deviceTokens) {
-  //   console.log('Device tokens not set:', newsletterEmail.user.id)
-  //   return true
-  // }
-  //
-  // const multicastMessage = messageForLink(page, deviceTokens)
-  // await sendMulticastPushNotifications(
-  //   newsletterEmail.user.id,
-  //   multicastMessage,
-  //   'newsletter'
-  // )
-
   return true
-}
-
-const messageForLink = (
-  link: Page,
-  deviceTokens: UserDeviceToken[]
-): MulticastMessage => {
-  let title = '📫 - An article was added to your Omnivore Inbox'
-
-  if (link.author) {
-    title = `📫 - ${link.author} has published a new article`
-  }
-
-  const pushData = !link
-    ? undefined
-    : {
-        link: Buffer.from(
-          JSON.stringify({
-            id: link.id,
-            url: link.url,
-            slug: link.slug,
-            title: link.title,
-            image: link.image,
-            author: link.author,
-            isArchived: !!link.archivedAt,
-            contentReader: ContentReader.Web,
-            readingProgressPercent: link.readingProgressPercent,
-            readingProgressAnchorIndex: link.readingProgressAnchorIndex,
-          })
-        ).toString('base64'),
-      }
-
-  return {
-    notification: {
-      title: title,
-      body: link.title,
-      imageUrl: link.image || undefined,
-    },
-    data: pushData,
-    tokens: deviceTokens.map((token) => token.token),
-  }
 }

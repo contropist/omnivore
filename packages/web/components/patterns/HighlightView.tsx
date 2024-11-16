@@ -1,5 +1,4 @@
 /* eslint-disable react/no-children-prop */
-import { BookOpen, PencilLine } from 'phosphor-react'
 import { useState } from 'react'
 import type { Highlight } from '../../lib/networking/fragments/highlightFragment'
 import { LabelChip } from '../elements/LabelChip'
@@ -14,68 +13,116 @@ import { styled } from '../tokens/stitches.config'
 import { HighlightViewNote } from './HighlightNotes'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { highlightColorVar } from '../../lib/themeUpdater'
+import { ReadableItem } from '../../lib/networking/library_items/useLibraryItems'
+import { UserBasicData } from '../../lib/networking/queries/useGetViewerQuery'
+import {
+  autoUpdate,
+  offset,
+  size,
+  useFloating,
+  useHover,
+  useInteractions,
+} from '@floating-ui/react'
+import { HighlightHoverActions } from './HighlightHoverActions'
 
 type HighlightViewProps = {
+  item: ReadableItem
+  viewer: UserBasicData
   highlight: Highlight
   author?: string
   title?: string
   updateHighlight: (highlight: Highlight) => void
+
+  viewInReader: (highlightId: string) => void
+
+  setLabelsTarget: (target: Highlight) => void
+  setShowConfirmDeleteHighlightId: (set: string) => void
 }
 
 const StyledQuote = styled(Blockquote, {
+  p: '0px',
   margin: '0px 0px 0px 0px',
   fontSize: '18px',
   lineHeight: '27px',
+  borderRadius: '4px',
+  width: '100%',
 })
 
 export function HighlightView(props: HighlightViewProps): JSX.Element {
   const [noteMode, setNoteMode] = useState<'preview' | 'edit'>('preview')
+  const [isOpen, setIsOpen] = useState(false)
+
+  const { refs, floatingStyles, context } = useFloating({
+    open: isOpen,
+    onOpenChange: setIsOpen,
+    middleware: [
+      offset({
+        mainAxis: -25,
+      }),
+      size(),
+    ],
+    placement: 'top-end',
+    whileElementsMounted: autoUpdate,
+  })
+
+  const hover = useHover(context)
+
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover])
+  const highlightColor = highlightColorVar(props.highlight.color)
 
   return (
-    <HStack
+    <VStack
+      ref={refs.setReference}
+      {...getReferenceProps()}
       css={{
+        p: '0px',
         width: '100%',
-        height: '100%',
-        alignItems: 'stretch',
       }}
     >
-      <VStack css={{ minHeight: '100%', width: '10px' }}>
-        <Box
-          css={{
-            mt: '5px',
-            width: '10px',
-            height: '10px',
-            background: '#FFD234',
-            borderRadius: '7px',
-          }}
+      <Box
+        ref={refs.setFloating}
+        style={floatingStyles}
+        {...getFloatingProps()}
+      >
+        <HighlightHoverActions
+          viewer={props.viewer}
+          highlight={props.highlight}
+          isHovered={isOpen ?? false}
+          viewInReader={props.viewInReader}
+          setLabelsTarget={props.setLabelsTarget}
+          setShowConfirmDeleteHighlightId={
+            props.setShowConfirmDeleteHighlightId
+          }
         />
-        <Box
-          css={{
-            width: '2px',
-            flexGrow: '1',
-            background: '#FFD234',
-            marginLeft: '4px',
-            flex: '1',
-            marginBottom: '10px',
-          }}
-        />
-      </VStack>
+      </Box>
       <VStack
         css={{
           width: '100%',
-          padding: '0px',
-          paddingLeft: '15px',
+
+          '@mdDown': {
+            padding: '0px',
+          },
         }}
       >
         <StyledQuote>
           <SpanBox
             css={{
               '> *': {
-                m: '0px',
+                display: 'inline',
+                padding: '3px',
+                backgroundColor: `rgba(${highlightColor}, var(--colors-highlight_background_alpha))`,
+                boxDecorationBreak: 'clone',
+                borderRadius: '2px',
+              },
+              '> ul': {
+                display: 'block',
+                boxShadow: 'unset',
+                backgroundColor: 'unset',
               },
               fontSize: '15px',
               lineHeight: 1.5,
-              color: '$grayText',
+              color: '$thTextSubtle2',
               img: {
                 display: 'block',
                 margin: '0.5em auto !important',
@@ -96,43 +143,27 @@ export function HighlightView(props: HighlightViewProps): JSX.Element {
           ))}
         </Box>
         <HStack
-          css={{ width: '100%', height: '100%', pt: '15px' }}
+          css={{
+            width: '100%',
+            pt: '15px',
+            '@mdDown': {
+              p: '10px',
+            },
+          }}
           alignment="start"
           distribution="start"
         >
           <HighlightViewNote
+            targetId={props.highlight.id}
             text={props.highlight.annotation}
             placeHolder="Add notes to this highlight..."
             highlight={props.highlight}
-            sizeMode={'normal'}
             mode={noteMode}
             setEditMode={setNoteMode}
             updateHighlight={props.updateHighlight}
           />
-          <SpanBox
-            css={{
-              lineHeight: '1',
-              marginLeft: '20px',
-              marginTop: '15px',
-              cursor: 'pointer',
-              borderRadius: '1000px',
-              '&:hover': {
-                background: '#EBEBEB',
-              },
-            }}
-            onClick={(event) => {
-              setNoteMode(noteMode == 'preview' ? 'edit' : 'preview')
-              event.preventDefault()
-            }}
-          >
-            {noteMode === 'edit' ? (
-              <BookOpen size={15} color="#898989" />
-            ) : (
-              <PencilLine size={15} color="#898989" />
-            )}
-          </SpanBox>
         </HStack>
       </VStack>
-    </HStack>
+    </VStack>
   )
 }

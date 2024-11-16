@@ -2,7 +2,7 @@ import { Button } from '../../../components/elements/Button'
 import { useGetNewsletterEmailsQuery } from '../../../lib/networking/queries/useGetNewsletterEmailsQuery'
 import { createNewsletterEmailMutation } from '../../../lib/networking/mutations/createNewsletterEmailMutation'
 import { deleteNewsletterEmailMutation } from '../../../lib/networking/mutations/deleteNewsletterEmailMutation'
-import { Copy } from 'phosphor-react'
+import { Copy } from '@phosphor-icons/react'
 import { theme, styled } from '../../../components/tokens/stitches.config'
 import {
   Box,
@@ -80,11 +80,10 @@ function CopyTextButton(props: CopyTextButtonProps): JSX.Element {
 export default function EmailsPage(): JSX.Element {
   const { emailAddresses, revalidate, isValidating } =
     useGetNewsletterEmailsQuery()
-  const [confirmDeleteEmailId, setConfirmDeleteEmailId] = useState<
-    undefined | string
-  >(undefined)
+  const [confirmDeleteEmailId, setConfirmDeleteEmailId] =
+    useState<undefined | string>(undefined)
 
-  applyStoredTheme(false)
+  applyStoredTheme()
 
   async function createEmail(): Promise<void> {
     const email = await createNewsletterEmailMutation()
@@ -117,7 +116,7 @@ export default function EmailsPage(): JSX.Element {
     <>
       <SettingsTable
         pageId="settings-emails-tag"
-        pageInfoLink="/help/newsletters"
+        pageInfoLink="https://docs.omnivore.app/using/inbox.html"
         headerTitle="Address"
         createTitle="Create a new email address"
         createAction={createEmail}
@@ -142,7 +141,10 @@ export default function EmailsPage(): JSX.Element {
                     }}
                   >
                     {`created ${formattedShortDate(email.createdAt)}, `}
-                    <Link href="/settings/subscriptions">{`${email.subscriptionCount} subscriptions`}</Link>
+                    <Link
+                      href="/settings/subscriptions"
+                      legacyBehavior
+                    >{`${email.subscriptionCount} subscriptions`}</Link>
                   </StyledText>
                 }
                 titleElement={

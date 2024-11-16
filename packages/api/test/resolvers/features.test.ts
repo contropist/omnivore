@@ -1,16 +1,20 @@
-import 'mocha'
 import { expect } from 'chai'
-import { User } from '../../src/entity/user'
-import { createTestUser, deleteTestUser } from '../db'
-import { graphqlRequest, request } from '../util'
-import { getRepository } from '../../src/entity/utils'
-import { Feature } from '../../src/entity/feature'
 import * as jwt from 'jsonwebtoken'
+import 'mocha'
 import sinon, { SinonFakeTimers } from 'sinon'
+import { User } from '../../src/entity/user'
 import { env } from '../../src/env'
-import { Like } from 'typeorm'
+import { userRepository } from '../../src/repository/user'
+import {
+  createFeature,
+  createFeatures,
+  deleteFeature,
+} from '../../src/services/features'
+import { deleteUser, deleteUsers } from '../../src/services/user'
+import { createTestUser } from '../db'
+import { graphqlRequest, request } from '../util'
 
-xdescribe('features resolvers', () => {
+describe('features resolvers', () => {
   let loginUser: User
   let authToken: string
 
@@ -21,11 +25,11 @@ xdescribe('features resolvers', () => {
       .post('/local/debug/fake-user-login')
       .send({ fakeEmail: loginUser.email })
 
-    authToken = res.body.authToken
+    authToken = res.body.authToken as string
   })
 
   after(async () => {
-    await deleteTestUser(loginUser.name)
+    await deleteUser(loginUser.id)
   })
 
   describe('optInFeature API', () => {
@@ -62,12 +66,10 @@ xdescribe('features resolvers', () => {
       clock.restore()
     })
 
-    context('when user is the first 1000 users', () => {
+    context('when user is the first 1500 users', () => {
       after(async () => {
         // reset feature
-        await getRepository(Feature).delete({
-          user: { id: loginUser.id },
-        })
+        await deleteFeature({ user: { id: loginUser.id } })
       })
 
       it('opts in to the feature', async () => {
@@ -95,10 +97,12 @@ xdescribe('features resolvers', () => {
       })
     })
 
-    context('when user is not the first 1000 users', () => {
+    context('when user is not the first 1500 users', () => {
+      let users: User[]
+
       before(async () => {
-        // create 1000 opt-in users
-        const usersToSave = Array.from(Array(1000).keys()).map((i) => {
+        // create 1500 opt-in users
+        const usersToSave = Array.from(Array(1500).keys()).map((i) => {
           return {
             name: `opt-in-user-${i}`,
             source: 'GOOGLE',
@@ -109,27 +113,24 @@ xdescribe('features resolvers', () => {
           }
         })
 
-        const users = await getRepository(User).save(usersToSave)
+        users = await userRepository.save(usersToSave)
 
         const features = users.map((user) => {
           return {
-            user: { id: user.id },
+            user,
             name: featureName,
             grantedAt: new Date(),
           }
         })
 
-        await getRepository(Feature).save(features)
+        await createFeatures(features)
       })
 
       after(async () => {
         // reset opt-in users
-        await getRepository(User).delete({
-          name: Like(`opt-in-user-%`),
-        })
-        await getRepository(Feature).delete({
-          name: featureName,
-        })
+        await deleteUsers(users.map((user) => user.id))
+        // reset feature
+        await deleteFeature({ name: featureName })
       })
 
       it('does not opt in to the feature', async () => {
@@ -158,20 +159,20 @@ xdescribe('features resolvers', () => {
     })
 
     context('when user is already opted in', () => {
+      const grantedAt = new Date('2024-05-15')
+
       before(async () => {
         // opt in
-        await getRepository(Feature).save({
+        await createFeature({
           user: { id: loginUser.id },
           name: featureName,
-          grantedAt: new Date(),
+          grantedAt,
         })
       })
 
       after(async () => {
         // reset feature
-        await getRepository(Feature).delete({
-          user: { id: loginUser.id },
-        })
+        await deleteFeature({ user: { id: loginUser.id } })
       })
 
       it('returns the feature', async () => {
@@ -183,7 +184,7 @@ xdescribe('features resolvers', () => {
           {
             uid: loginUser.id,
             featureName,
-            grantedAt: Date.now() / 1000,
+            grantedAt: grantedAt.getTime() / 1000,
           },
           env.server.jwtSecret,
           { expiresIn: '1y' }
@@ -192,7 +193,7 @@ xdescribe('features resolvers', () => {
         expect(res.body.data.optInFeature).to.eql({
           feature: {
             name: featureName,
-            grantedAt: new Date().toISOString(),
+            grantedAt: grantedAt.toISOString(),
             token,
           },
         })

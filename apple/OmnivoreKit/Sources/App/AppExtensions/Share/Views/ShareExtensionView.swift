@@ -7,11 +7,9 @@ import Views
 // swiftlint:disable file_length type_body_length
 public struct ShareExtensionView: View {
   let extensionContext: NSExtensionContext?
-  @StateObject var labelsViewModel = LabelsViewModel()
-  @StateObject private var viewModel = ShareExtensionViewModel()
+  @StateObject var viewModel: ShareExtensionViewModel
+  @StateObject var labelsViewModel: LabelsViewModel
 
-  @State var reminderTime: ReminderTime?
-  @State var hideUntilReminded = false
   @State var previousLabels: [LinkedItemLabel]?
   @State var messageText: String?
   @State var showSearchLabels = false
@@ -19,8 +17,11 @@ public struct ShareExtensionView: View {
   @State var viewState = ViewState.mainView
   @State var showHighlightInstructionAlert = false
 
+  @State var showAddNoteModal = false
+
   enum FocusField: Hashable {
-    case titleEditor
+    case noteEditor
+    case labelEditor
   }
 
   enum ViewState {
@@ -32,36 +33,17 @@ public struct ShareExtensionView: View {
 
   @FocusState private var focusedField: FocusField?
 
-  private func handleReminderTimeSelection(_ selectedTime: ReminderTime) {
-    if selectedTime == reminderTime {
-      reminderTime = nil
-      hideUntilReminded = false
-    } else {
-      reminderTime = selectedTime
-      hideUntilReminded = true
-    }
-  }
+  public init(viewModel: ShareExtensionViewModel,
+              labelsViewModel: LabelsViewModel,
+              extensionContext: NSExtensionContext?)
+  {
+    _viewModel = StateObject(wrappedValue: viewModel)
+    _labelsViewModel = StateObject(wrappedValue: labelsViewModel)
+    self.extensionContext = extensionContext
 
-  private var titleText: String {
-    switch viewModel.status {
-    case .saved, .synced, .syncFailed(error: _):
-      return "Saved to Omnivore"
-    case .processing:
-      return "Saving to Omnivore"
-    case .failed(error: _):
-      return "Error saving to Omnivore"
-    }
-  }
-
-  private var titleColor: Color {
-    switch viewModel.status {
-    case .saved, .processing:
-      return .appGrayText
-    case .failed(error: _), .syncFailed(error: _):
-      return .red
-    case .synced:
-      return .appGreenSuccess
-    }
+    #if os(iOS)
+      UITextView.appearance().textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 10, right: 4)
+    #endif
   }
 
   private func localImage(from url: URL) -> Image? {
@@ -86,232 +68,143 @@ public struct ShareExtensionView: View {
     }
   }
 
-  var titleBar: some View {
-    HStack {
-      Spacer()
+  var articleInfoBox: some View {
+    HStack(alignment: .top, spacing: 15) {
+      AsyncImage(url: self.viewModel.iconURL) { phase in
+        if let image = phase.image {
+          image
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: 56, height: 56)
+        } else {
+          Color.appButtonBackground
+            .frame(width: 56, height: 56)
+        }
+      }
+      .frame(width: 56, height: 56).overlay(
+        RoundedRectangle(cornerRadius: 5)
+          .stroke(.white, lineWidth: 1)
+      ).cornerRadius(5)
+      VStack(alignment: .leading) {
+        Text(self.viewModel.url ?? "")
+          .font(Font.system(size: 12))
+          .lineLimit(1)
+          .foregroundColor(Color.extensionTextSubtle)
+          .frame(height: 14)
 
+        Text(self.viewModel.title)
+          .font(Font.system(size: 13, weight: .semibold))
+          .lineSpacing(1.25)
+          .foregroundColor(.appGrayTextContrast)
+          .fixedSize(horizontal: false, vertical: true)
+          .lineLimit(2)
+          .frame(height: 33)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }.padding(.vertical, 2)
+      // Spacer()
       Image(systemName: "checkmark.circle")
         .frame(width: 15, height: 15)
         .foregroundColor(.appGreenSuccess)
         .opacity(isSynced ? 1.0 : 0.0)
-
-      Text(messageText ?? titleText)
-        .font(.appSubheadline)
-        .foregroundColor(titleColor)
-
-      Spacer()
     }
   }
 
-  public var titleBox: some View {
-    VStack(alignment: .trailing) {
-      Button(action: {}, label: {
-        Text("Edit")
-          .font(.appFootnote)
-          .padding(.trailing, 8)
-          .onTapGesture {
-            viewState = .editingTitle
-          }
-      })
-        .disabled(viewState == .editingTitle)
-        .opacity(viewState == .editingTitle ? 0.0 : 1.0)
-
-      VStack(alignment: .leading) {
-        if viewState != .editingTitle {
-          Text(self.viewModel.title)
-            .font(.appSubheadline)
-            .lineLimit(2)
-            .fixedSize(horizontal: false, vertical: true)
-            .foregroundColor(.appGrayTextContrast)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-          Spacer()
-
-          Text(self.viewModel.url ?? "")
-            .font(.appFootnote)
-            .foregroundColor(.appGrayText)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-      }
-      .frame(maxWidth: .infinity, maxHeight: 60)
-      .padding()
-      .overlay(
-        RoundedRectangle(cornerRadius: 8)
-          .stroke(Color.appGrayBorder, lineWidth: 1)
-      )
-    }
+  var hasNoteText: Bool {
+    !viewModel.noteText.isEmpty
   }
 
-  var labelsSection: some View {
-    HStack {
-      if viewState != .editingLabels {
-        ZStack {
-          Circle()
-            .foregroundColor(Color.blue)
-            .frame(width: 34, height: 34)
-
-          Image(systemName: "tag")
-            .font(.appCallout)
-            .frame(width: 34, height: 34)
-        }
-        .padding(.trailing, 8)
-
-        VStack {
-          Text(LocalText.labelsGeneric)
-            .font(.appSubheadline)
-            .foregroundColor(Color.appGrayTextContrast)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-          let labelCount = labelsViewModel.selectedLabels.count
-          Text(labelCount > 0 ?
-            "\(labelCount) label\(labelCount > 1 ? "s" : "") selected"
-            : "Add labels to your saved link")
-            .font(.appFootnote)
-            .foregroundColor(Color.appGrayText)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
+  var noteBox: some View {
+    Button(action: {
+      NotificationCenter.default.post(name: Notification.Name("ShowAddNoteSheet"), object: nil)
+    }, label: {
+      VStack {
+        Text(hasNoteText ? viewModel.noteText : "Add note...")
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+          .multilineTextAlignment(.leading)
         Spacer()
-
-        Image(systemName: "chevron.right")
-          .font(.appCallout)
-      } else {
-        VStack(spacing: 15) {
-          SearchBar(searchTerm: $labelsViewModel.labelSearchFilter)
-
-          // swiftlint:disable line_length
-          ScrollView {
-            LabelsMasonaryView(labels: labelsViewModel.labels.applySearchFilter(labelsViewModel.labelSearchFilter),
-                               selectedLabels: labelsViewModel.selectedLabels.applySearchFilter(labelsViewModel.labelSearchFilter),
-                               onLabelTap: onLabelTap)
-            Button(
-              action: { labelsViewModel.showCreateLabelModal = true },
-              label: {
-                HStack {
-                  Image(systemName: "tag").foregroundColor(.blue)
-                  Text(
-                    labelsViewModel.labelSearchFilter.count > 0 ?
-                      "Create: \"\(labelsViewModel.labelSearchFilter)\" label" :
-                      LocalText.createLabelMessage
-                  ).foregroundColor(.blue)
-                    .font(Font.system(size: 14))
-                  Spacer()
-                }
-              }
-            )
-            .buttonStyle(PlainButtonStyle())
-            .padding(10)
-          }.background(Color.appButtonBackground)
-          // swiftlint:enable line_length
-        }
       }
-    }
-    .padding(viewState == .editingLabels ? 0 : 16)
-    .background(viewState == .editingLabels ? Color.clear : Color.appButtonBackground)
-    .frame(maxWidth: .infinity, maxHeight: viewState == .editingLabels ? .infinity : 60)
-    .cornerRadius(8)
+    })
+      .buttonStyle(.plain)
+      .foregroundColor(hasNoteText ?
+        Color.appGrayTextContrast : Color.extensionTextSubtle
+      )
+      .font(Font.system(size: 13, weight: .semibold))
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+      .contentShape(Rectangle())
   }
 
-  var highlightSection: some View {
-    HStack {
-      if viewState != .viewingHighlight {
-        ZStack {
-          Circle()
-            .foregroundColor(Color.appBackground)
-            .frame(width: 34, height: 34)
-
-          Image(systemName: "highlighter")
-            .font(.appCallout)
-            .frame(width: 34, height: 34)
-            .foregroundColor(Color.black)
-        }
-        .padding(.trailing, 8)
-
-        VStack {
-          Text(LocalText.genericHighlight)
-            .font(.appSubheadline)
-            .foregroundColor(Color.appGrayTextContrast)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-          Text(viewModel.highlightData != nil ?
-            viewModel.highlightData!.highlightText
-            : "Select text before saving to create highlight")
-            .font(.appFootnote)
-            .foregroundColor(Color.appGrayText)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        Spacer()
-
-        Image(systemName: "chevron.right")
-          .font(.appCallout)
-      } else if let highlightText = self.viewModel.highlightData?.highlightText {
-        Text(highlightText)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          .cornerRadius(8)
-          .padding(0)
+  var labelsButton: some View {
+    Button(action: {
+      NotificationCenter.default.post(name: Notification.Name("ShowEditLabelsSheet"), object: nil)
+    }, label: {
+      Label {
+        Text("Add Labels").font(Font.system(size: 12, weight: .medium)).tint(Color.white)
+      } icon: {
+        Image.label.resizable(resizingMode: .stretch).frame(width: 17, height: 17).tint(Color.white)
       }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, maxHeight: viewState == .viewingHighlight ? .infinity : 60)
-    .background(Color.appButtonBackground)
-    .cornerRadius(8)
+      .foregroundColor(Color.white)
+      .padding(.leading, 10).padding(.trailing, 12)
+    })
+      .buttonStyle(.plain)
+      .frame(height: 28)
+      .background(Color.blue)
+      .cornerRadius(24)
   }
 
-  func onLabelTap(label: LinkedItemLabel, textChip _: TextChip) {
-    if labelsViewModel.selectedLabels.contains(label) {
-      labelsViewModel.selectedLabels.remove(label)
-    } else {
-      labelsViewModel.selectedLabels.insert(label)
-    }
+  var infoBox: some View {
+    VStack(alignment: .leading, spacing: 15) {
+      articleInfoBox
 
-    if let linkedItem = viewModel.linkedItem {
-      labelsViewModel.saveItemLabelChanges(itemID: linkedItem.unwrappedID, dataService: viewModel.services.dataService)
-    }
+      Divider()
+        .frame(maxWidth: .infinity)
+        .frame(height: 1)
+        .background(Color(hex: "545458")?.opacity(0.65))
+
+      noteBox
+
+      labelsButton
+    }.padding(15)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Color.extensionPanelBackground)
+      .cornerRadius(14)
   }
 
-  var primaryButtons: some View {
-    HStack {
-      Button(
-        action: { viewModel.handleReadNowAction(extensionContext: extensionContext) },
-        label: {
-          Label("Read Now", systemImage: "book")
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-      )
-      .foregroundColor(.appGrayTextContrast)
-      .background(Color.appButtonBackground)
-      .frame(height: 52)
-      .cornerRadius(8)
-
-      Spacer(minLength: 8)
-
-      Button(
-        action: {
-          extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
-        },
-        label: {
-          Label(LocalText.readLaterGeneric, systemImage: "text.book.closed.fill")
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-      )
-      .foregroundColor(.black)
-      .background(Color.appBackground)
-      .frame(height: 52)
-      .cornerRadius(8)
+  var labelsBox: some View {
+    ScrollView(.vertical) {
+      LabelsMasonaryView(labels: labelsViewModel.labels,
+                         selectedLabels: labelsViewModel.selectedLabels,
+                         onLabelTap: { label, _ in
+                           if !labelsViewModel.selectedLabels.contains(label) {
+                             labelsViewModel.selectedLabels += [label]
+                           } else {
+                             labelsViewModel.selectedLabels.removeAll { $0.unwrappedID == label.unwrappedID }
+                           }
+                           if let itemID = viewModel.linkedItem?.id {
+                             labelsViewModel.saveItemLabelChanges(
+                               itemID: itemID,
+                               dataService: viewModel.services.dataService
+                             )
+                           }
+                         })
     }
+    .padding(.bottom, 15)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Color.extensionPanelBackground)
+    .cornerRadius(14)
   }
 
-  var moreActionsMenu: some View {
+  var moreMenuButton: some View {
     Menu {
-      Button(
-        action: {},
-        label: {
-          Button(LocalText.dismissButton, role: .cancel, action: {})
-        }
-      )
+      #if os(iOS)
+        Button(action: {
+          NotificationCenter.default.post(name: Notification.Name("ShowEditInfoSheet"), object: nil)
+        }, label: {
+          Label(
+            "Edit Info",
+            systemImage: "info.circle"
+          )
+        })
+      #endif
       Button(action: {
         if let linkedItem = self.viewModel.linkedItem {
           self.viewModel.setLinkArchived(dataService: self.viewModel.services.dataService,
@@ -331,7 +224,7 @@ public struct ShareExtensionView: View {
       Button(
         action: {
           if let linkedItem = self.viewModel.linkedItem {
-            self.viewModel.removeLink(dataService: self.viewModel.services.dataService, objectID: linkedItem.objectID)
+            self.viewModel.removeLibraryItem(dataService: self.viewModel.services.dataService, objectID: linkedItem.objectID)
             messageText = "Link Removed"
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) {
               extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
@@ -343,161 +236,260 @@ public struct ShareExtensionView: View {
         }
       )
     } label: {
-      Text("More Actions")
-        .font(.appFootnote)
-        .foregroundColor(Color.blue)
-        .frame(maxWidth: .infinity)
-        .padding(8)
-        .padding(.bottom, 8)
-    }
-  }
+      ZStack {
+        Circle()
+          .foregroundColor(Color.circleButtonBackground)
+          .frame(width: 30, height: 30)
 
-  var editingViewTitle: String {
-    switch viewState {
-    case .editingTitle:
-      return "Edit Title"
-    case .editingLabels:
-      return LocalText.labelsGeneric
-    case .viewingHighlight:
-      return LocalText.genericHighlight
-    default:
-      return ""
-    }
-  }
-
-  func submitEditTitle() {
-    if viewState == .editingTitle {
-      if let linkedItem = viewModel.linkedItem {
-        viewModel.submitTitleEdit(dataService: viewModel.services.dataService,
-                                  itemID: linkedItem.unwrappedID,
-                                  title: viewModel.title,
-                                  description: linkedItem.descriptionText ?? "")
+        Image(systemName: "ellipsis")
+          .resizable(resizingMode: Image.ResizingMode.stretch)
+          .foregroundColor(Color.circleButtonForeground)
+          .aspectRatio(contentMode: .fit)
+          .frame(width: 15, height: 15)
       }
+    }.buttonStyle(.plain)
+  }
+
+  var closeButton: some View {
+    Button(action: {
+      extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+    }, label: {
+      ZStack {
+        Circle()
+          .foregroundColor(Color.circleButtonBackground)
+          .frame(width: 30, height: 30)
+
+        Image(systemName: "xmark")
+          .resizable(resizingMode: Image.ResizingMode.stretch)
+          .foregroundColor(Color.circleButtonForeground)
+          .aspectRatio(contentMode: .fit)
+          .font(Font.title.weight(.bold))
+          .frame(width: 12, height: 12)
+      }
+    }).buttonStyle(.plain)
+  }
+
+  var titleBar: some View {
+    HStack {
+      Text("Saved to Omnivore")
+        .font(Font.system(size: 22, weight: .bold))
+        .frame(maxWidth: .infinity, alignment: .leading)
+      #if os(iOS)
+        Spacer()
+        moreMenuButton
+        closeButton
+      #endif
     }
-    viewState = .mainView
+  }
+
+  var displayDismiss: Bool {
+    true
   }
 
   public var body: some View {
-    VStack(alignment: .center) {
-      Capsule()
-        .fill(.gray)
-        .frame(width: 60, height: 4)
-        .padding(.top, 10)
+    #if os(iOS)
+      iOSBody
+        .environmentObject(viewModel.services.dataService)
+    #else
+      macOSBody
+        .environmentObject(viewModel.services.dataService)
+    #endif
+  }
 
-      if viewState == .mainView {
-        titleBar
-          .padding(.top, 10)
-          .padding(.bottom, 12)
-      } else {
-        ZStack {
-          Text(editingViewTitle).bold()
-            .frame(maxWidth: .infinity, alignment: .center)
+  @AppStorage(UserDefaultKey.visibleShareExtensionTab.rawValue) var visibleTab = "info"
 
-          Button(action: {
-            withAnimation {
-              submitEditTitle()
-            }
-          }, label: { Text(LocalText.doneGeneric).bold() })
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .padding(8)
-        .padding(.bottom, 4)
+  var iOSBody: some View {
+    VStack(alignment: .leading, spacing: 15) {
+      titleBar
+        .padding(.top, 15)
+
+      TabView(selection: $visibleTab) {
+        infoBox
+          .tag("info")
+          .padding(.horizontal, 15)
+        labelsBox
+          .tag("labels")
+          .padding(.horizontal, 15)
       }
-
-      if viewState == .mainView {
-        titleBox
-      }
-
-      if viewState == .editingTitle {
-        ScrollView(showsIndicators: false) {
-          VStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-              TextEditor(text: $viewModel.title)
-                .textFieldStyle(.roundedBorder)
-                .lineSpacing(6)
-                .submitLabel(.done)
-                .accentColor(.appGraySolid)
-                .foregroundColor(.appGrayTextContrast)
-                .font(.appSubheadline)
-                .padding(8)
-                .background(
-                  RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.appGrayBorder, lineWidth: 1)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.systemBackground))
-                )
-                .frame(height: 100)
-                .focused($focusedField, equals: .titleEditor)
-                .task {
-                  self.focusedField = .titleEditor
-                }
-                .onChange(of: viewModel.title) { text in
-                  if text.last?.isNewline == .some(true) {
-                    viewModel.title.removeLast()
-                    submitEditTitle()
-                  }
-                }
-            }
-          }
-          .padding(8)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        Spacer()
-      }
-
-      if viewState != .editingTitle {
-        if viewState != .viewingHighlight {
-          labelsSection
-            .onTapGesture {
-              withAnimation {
-                previousLabels = Array(self.labelsViewModel.selectedLabels)
-                viewState = .editingLabels
-              }
-            }
-        }
-        if viewState != .editingLabels {
-          highlightSection
-            .onTapGesture {
-              withAnimation {
-                if viewModel.highlightData != nil {
-                  viewState = .viewingHighlight
-                } else {
-                  showHighlightInstructionAlert = true
-                }
-              }
-            }
-        }
-      }
+      .tabViewStyle(.page(indexDisplayMode: .never))
+      .padding(.horizontal, -15)
 
       Spacer()
 
-      if viewState == .mainView {
-        Divider()
-          .padding(.bottom, 20)
-
-        primaryButtons
-
-        moreActionsMenu
+      HStack {
+        #if os(macOS)
+          moreMenuButton
+            .padding(.bottom, 15)
+        #endif
+        Spacer()
+        Button(action: {
+          viewModel.dismissExtension(extensionContext: extensionContext)
+        }, label: {
+          Text("Dismiss")
+          #if os(iOS)
+            .font(Font.system(size: 17, weight: .semibold))
+            .tint(Color.appGrayText)
+            .padding(20)
+          #endif
+        })
+        #if os(iOS)
+          .frame(height: 50)
+          .cornerRadius(24)
+        #endif
+        .padding(.bottom, 15)
+        Button(action: {
+          viewModel.handleReadNowAction(extensionContext: extensionContext)
+        }, label: {
+          Text("Read Now")
+            .foregroundColor(Color.white)
+          #if os(iOS)
+            .font(Font.system(size: 17, weight: .semibold))
+            .tint(Color.white)
+            .padding(20)
+          #endif
+        })
+          .buttonStyle(.plain)
+        #if os(iOS)
+          .frame(height: 50)
+          .background(Color.blue)
+          .cornerRadius(24)
+        #endif
+        .padding(.bottom, 15)
+      }.frame(maxWidth: .infinity)
+    }.padding(.horizontal, 15)
+      .background(Color.extensionBackground)
+      .onAppear {
+        viewModel.savePage(extensionContext: extensionContext)
+        Task {
+          await labelsViewModel.loadLabels(dataService: viewModel.services.dataService, initiallySelectedLabels: [])
+        }
       }
+  }
+
+  @State var labelsSearch = ZWSP
+  @State var isLabelsEntryFocused = false
+
+  func save() {
+    if !viewModel.noteText.isEmpty {
+      viewModel.saveNote()
     }
-    .frame(
-      maxWidth: .infinity,
-      maxHeight: .infinity,
-      alignment: .topLeading
-    )
-    .padding(.horizontal, 16)
-    .onAppear {
-      viewModel.savePage(extensionContext: extensionContext)
+    if let itemID = viewModel.linkedItem?.id {
+      labelsViewModel.saveItemLabelChanges(itemID: itemID, dataService: viewModel.services.dataService)
     }
-    .sheet(isPresented: $labelsViewModel.showCreateLabelModal) {
-      CreateLabelView(viewModel: labelsViewModel, newLabelName: labelsViewModel.labelSearchFilter)
+  }
+
+  var macOSBody: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: 10) {
+        Text("Saved to Omnivore")
+          .font(Font.system(size: 17))
+        Image(systemName: "checkmark.circle")
+          .foregroundColor(.appGreenSuccess)
+          .opacity(isSynced ? 1.0 : 0.0)
+        Spacer()
+      }.padding(15)
+
+      Divider()
+
+      ZStack(alignment: .topLeading) {
+        TextEditor(text: $viewModel.noteText)
+          .frame(maxWidth: .infinity)
+          .font(Font.system(size: 14))
+          .accentColor(.blue)
+        #if os(macOS)
+          .introspectTextView { textView in
+            textView.textContainerInset = NSSize(width: 10, height: 10)
+          }
+        #endif
+        .focused($focusedField, equals: .noteEditor)
+        if viewModel.noteText.isEmpty {
+          Text("Notes")
+            .fontWeight(.light)
+            .font(Font.system(size: 14))
+            .foregroundColor(.black.opacity(0.25))
+            .padding(.leading, 15)
+            .padding(.top, 10)
+            .allowsHitTesting(false)
+        }
+      }
+
+      Divider()
+
+      ZStack(alignment: .topLeading) {
+        LabelsEntryView(searchTerm: $labelsSearch, isFocused: $isLabelsEntryFocused, viewModel: labelsViewModel)
+          .frame(maxWidth: .infinity)
+          .padding(.horizontal, 8)
+          .focused($focusedField, equals: .labelEditor)
+
+        if labelsViewModel.selectedLabels.isEmpty, labelsSearch == ZWSP {
+          Text("Type to add labels")
+            .fontWeight(.light)
+            .font(Font.system(size: 14))
+            .foregroundColor(.black.opacity(0.25))
+            .padding(.leading, 15)
+            .padding(.top, 10)
+            .allowsHitTesting(false)
+        }
+      }
+
+      Divider()
+
+      HStack {
+        moreMenuButton
+          .padding(.bottom, 15)
+        Spacer()
+        Button(action: {
+          save()
+          extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+        }, label: {
+          Text("Dismiss")
+        })
+          .padding(.bottom, 15)
+        Button(action: {
+          save()
+          viewModel.handleReadNowAction(extensionContext: extensionContext)
+        }, label: {
+          Text("Read Now")
+        })
+          .padding(.bottom, 15)
+
+      }.padding(15)
+
+    }.frame(maxWidth: .infinity)
+      .background(Color.isDarkMode ? Color.systemBackground : Color.white)
+      .onAppear {
+        if let extensionContext = extensionContext {
+          viewModel.savePage(extensionContext: extensionContext)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) {
+          focusedField = .labelEditor
+        }
+        Task {
+          await labelsViewModel.loadLabels(dataService: viewModel.services.dataService, initiallySelectedLabels: [])
+        }
+      }
+  }
+}
+
+public struct LoggedOutShareExtensionView: View {
+  let extensionContext: NSExtensionContext?
+
+  public init(
+    extensionContext: NSExtensionContext?)
+  {
+    self.extensionContext = extensionContext
+  }
+
+  public var body: some View {
+    VStack(spacing: 20) {
+      Text("You are not logged in. Please open the Omnivore app and log in to start saving items to your library")
+      Button(action: {
+        if let extensionContext = extensionContext {
+          extensionContext.completeRequest(returningItems: nil)
+        }
+      }, label: { Text("Dismiss") })
     }
-    .alert("Before saving an article select text in Safari to create a highlight on save.",
-           isPresented: $showHighlightInstructionAlert) {
-      Button(LocalText.genericOk, role: .cancel) { showHighlightInstructionAlert = false }
-    }
-    .task {
-      await labelsViewModel.loadLabelsFromStore(dataService: viewModel.services.dataService)
-    }.environmentObject(viewModel.services.dataService)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .padding(20)
   }
 }

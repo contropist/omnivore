@@ -7,12 +7,24 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm'
-import { RegistrationType, StatusType } from '../datalayer/user/model'
+import { Label } from './label'
 import { NewsletterEmail } from './newsletter_email'
 import { Profile } from './profile'
-import { Label } from './label'
 import { Subscription } from './subscription'
 import { UserPersonalization } from './user_personalization'
+
+export enum RegistrationType {
+  Google = 'GOOGLE',
+  Apple = 'APPLE',
+  Email = 'EMAIL',
+}
+
+export enum StatusType {
+  Active = 'ACTIVE',
+  Pending = 'PENDING',
+  Deleted = 'DELETED',
+  Archived = 'ARCHIVED',
+}
 
 @Entity()
 export class User {
@@ -40,7 +52,10 @@ export class User {
   @OneToMany(() => NewsletterEmail, (newsletterEmail) => newsletterEmail.user)
   newsletterEmails?: NewsletterEmail[]
 
-  @OneToOne(() => Profile, (profile) => profile.user, { eager: true })
+  @OneToOne(() => Profile, (profile) => profile.user, {
+    eager: true,
+    cascade: true,
+  })
   profile!: Profile
 
   @Column('varchar', { length: 255, nullable: true })
@@ -59,5 +74,5 @@ export class User {
     () => UserPersonalization,
     (userPersonalization) => userPersonalization.user
   )
-  userPersonalization!: UserPersonalization
+  userPersonalization?: UserPersonalization
 }
