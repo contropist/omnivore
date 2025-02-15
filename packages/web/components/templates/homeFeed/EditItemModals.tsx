@@ -1,22 +1,22 @@
+import dayjs, { Dayjs } from 'dayjs'
+import { useCallback, useState } from 'react'
 import {
+  ArticleAttributes,
+  useUpdateItem,
+} from '../../../lib/networking/library_items/useLibraryItems'
+import { LibraryItem } from '../../../lib/networking/library_items/useLibraryItems'
+import { showErrorToast, showSuccessToast } from '../../../lib/toastHelpers'
+import { CloseButton } from '../../elements/CloseButton'
+import { FormInput } from '../../elements/FormElements'
+import { Box, HStack, SpanBox, VStack } from '../../elements/LayoutPrimitives'
+import {
+  ModalButtonBar,
   ModalContent,
   ModalOverlay,
   ModalRoot,
 } from '../../elements/ModalPrimitives'
-import { Box, HStack, SpanBox, VStack } from '../../elements/LayoutPrimitives'
-import { Button } from '../../elements/Button'
 import { StyledText } from '../../elements/StyledText'
-
-import { FormInput } from '../../elements/FormElements'
-import { useCallback, useState } from 'react'
-import { LibraryItem } from '../../../lib/networking/queries/useGetLibraryItemsQuery'
 import { StyledTextArea } from '../../elements/StyledTextArea'
-import { updatePageMutation } from '../../../lib/networking/mutations/updatePageMutation'
-import { showErrorToast, showSuccessToast } from '../../../lib/toastHelpers'
-import dayjs, { Dayjs } from 'dayjs'
-import { ArticleAttributes } from '../../../lib/networking/queries/useGetArticleQuery'
-import { CloseButton } from '../../elements/CloseButton'
-
 type EditLibraryItemModalProps = {
   onOpenChange: (open: boolean) => void
   item: LibraryItem
@@ -26,23 +26,28 @@ type EditLibraryItemModalProps = {
 export function EditLibraryItemModal(
   props: EditLibraryItemModalProps
 ): JSX.Element {
+  const updateItem = useUpdateItem()
   const onSave = useCallback(
     (
       title: string,
       author: string | undefined,
-      description: string,
+      description: string | undefined,
       savedAt: Dayjs,
       publishedAt: Dayjs | undefined
     ) => {
       ;(async () => {
         if (title !== '') {
-          const res = await updatePageMutation({
-            pageId: props.item.node.id,
-            title,
-            description,
-            byline: author,
-            savedAt: savedAt.toISOString(),
-            publishedAt: publishedAt ? publishedAt.toISOString() : undefined,
+          const res = await updateItem.mutateAsync({
+            itemId: props.item.node.id,
+            slug: props.item.node.slug,
+            input: {
+              pageId: props.item.node.id,
+              title,
+              description,
+              byline: author,
+              savedAt: savedAt.toISOString(),
+              publishedAt: publishedAt ? publishedAt.toISOString() : undefined,
+            },
           })
 
           if (res) {
@@ -97,30 +102,35 @@ type EditArticleModalProps = {
   updateArticle: (
     title: string,
     author: string | undefined,
-    description: string,
+    description: string | undefined,
     savedAt: string,
     publishedAt: string | undefined
   ) => void
 }
 
 export function EditArticleModal(props: EditArticleModalProps): JSX.Element {
+  const updateItem = useUpdateItem()
   const onSave = useCallback(
     (
       title: string,
       author: string | undefined,
-      description: string,
+      description: string | undefined,
       savedAt: Dayjs,
       publishedAt: Dayjs | undefined
     ) => {
       ;(async () => {
         if (title !== '') {
-          const res = await updatePageMutation({
-            pageId: props.article.id,
-            title,
-            description,
-            byline: author,
-            savedAt: savedAt.toISOString(),
-            publishedAt: publishedAt ? publishedAt.toISOString() : undefined,
+          const res = await updateItem.mutateAsync({
+            itemId: props.article.id,
+            slug: props.article.slug,
+            input: {
+              pageId: props.article.id,
+              title,
+              description,
+              byline: author,
+              savedAt: savedAt.toISOString(),
+              publishedAt: publishedAt ? publishedAt.toISOString() : undefined,
+            },
           })
           if (res) {
             props.updateArticle(
@@ -167,7 +177,7 @@ export function EditArticleModal(props: EditArticleModalProps): JSX.Element {
 type EditItemModalProps = {
   title: string
   author: string | undefined
-  description: string
+  description: string | undefined
 
   savedAt: Dayjs
   publishedAt: Dayjs | undefined
@@ -176,7 +186,7 @@ type EditItemModalProps = {
   onSave: (
     title: string,
     author: string | undefined,
-    description: string,
+    description: string | undefined,
     savedAt: Dayjs,
     publishedAt: Dayjs | undefined
   ) => void
@@ -215,13 +225,24 @@ function EditItemModal(props: EditItemModalProps): JSX.Element {
   }
 
   return (
-    <ModalRoot defaultOpen onOpenChange={props.onOpenChange} css={{}}>
+    <ModalRoot
+      defaultOpen
+      modal={true}
+      onOpenChange={() => {
+        props.onOpenChange(false)
+      }}
+      css={{}}
+    >
       <ModalOverlay />
       <ModalContent
-        css={{ bg: '$grayBg', p: '20px', maxWidth: '420px' }}
-        onInteractOutside={() => {
-          // remove focus from modal
-          ;(document.activeElement as HTMLElement).blur()
+        css={{ bg: '$grayBg', p: '20px', maxWidth: '480px' }}
+        onInteractOutside={(event) => {
+          event.preventDefault()
+        }}
+        onEscapeKeyDown={(event) => {
+          props.onOpenChange(false)
+          event.preventDefault()
+          event.stopPropagation()
         }}
       >
         <VStack distribution="start" css={{ p: '0px' }}>
@@ -230,14 +251,15 @@ function EditItemModal(props: EditItemModalProps): JSX.Element {
             <form
               onSubmit={(event) => {
                 event.preventDefault()
+                props.onSave(title, author, description, savedAt, publishedAt)
               }}
             >
               <HStack distribution="start" css={{ width: '100%' }}>
                 <VStack css={{ width: '45%' }}>
-                  <StyledText css={titleStyle}>SAVED AT:</StyledText>
+                  <StyledText css={titleStyle}>SAVED AT</StyledText>
                   <FormInput
                     type="datetime-local"
-                    value={props.savedAt.format('YYYY-MM-DDTHH:mm')}
+                    value={savedAt.format('YYYY-MM-DDTHH:mm')}
                     placeholder="Edit Date"
                     onChange={(event) => {
                       const dateStr = event.target.value
@@ -246,6 +268,7 @@ function EditItemModal(props: EditItemModalProps): JSX.Element {
                     css={{
                       ...inputStyle,
                       fontSize: '14px',
+                      textIndent: '0px',
                     }}
                   />
                 </VStack>
@@ -254,8 +277,8 @@ function EditItemModal(props: EditItemModalProps): JSX.Element {
                   <FormInput
                     type="datetime-local"
                     value={
-                      props.publishedAt
-                        ? props.publishedAt.format('YYYY-MM-DDTHH:mm')
+                      publishedAt
+                        ? publishedAt.format('YYYY-MM-DDTHH:mm')
                         : undefined
                     }
                     placeholder="Edit Published Date"
@@ -266,6 +289,7 @@ function EditItemModal(props: EditItemModalProps): JSX.Element {
                     css={{
                       ...inputStyle,
                       fontSize: '14px',
+                      textIndent: '0px',
                     }}
                   />
                 </VStack>
@@ -309,30 +333,10 @@ function EditItemModal(props: EditItemModalProps): JSX.Element {
                 }}
                 maxLength={4000}
               />
-              <HStack distribution="end" css={{ mt: '12px', width: '100%' }}>
-                <Button
-                  onClick={() => props.onOpenChange(false)}
-                  style="cancelGeneric"
-                  css={{ mr: '5px' }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    props.onSave(
-                      title,
-                      author,
-                      description,
-                      savedAt,
-                      publishedAt
-                    )
-                  }}
-                  style="ctaDarkYellow"
-                  css={{ mb: '0px' }}
-                >
-                  Save Changes
-                </Button>
-              </HStack>
+              <ModalButtonBar
+                onOpenChange={props.onOpenChange}
+                acceptButtonLabel="Save Changes"
+              />
             </form>
           </Box>
         </VStack>

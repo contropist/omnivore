@@ -1,15 +1,18 @@
 import { Box, VStack, HStack, SpanBox } from '../../elements/LayoutPrimitives'
 import { useCallback, useMemo, useState } from 'react'
-import { CaretDown, CaretUp } from 'phosphor-react'
-import { MetaStyle, timeAgo, TitleStyle } from './LibraryCardStyles'
+import { CaretDown, CaretUp } from '@phosphor-icons/react'
+import { MetaStyle, TitleStyle } from './LibraryCardStyles'
 import { styled } from '@stitches/react'
 import { UserBasicData } from '../../../lib/networking/queries/useGetViewerQuery'
-import { LibraryItemNode } from '../../../lib/networking/queries/useGetLibraryItemsQuery'
+import { LibraryItemNode } from '../../../lib/networking/library_items/useLibraryItems'
 import { Button } from '../../elements/Button'
 import { theme } from '../../tokens/stitches.config'
-import { getHighlightLocation } from '../../templates/article/NotebookModal'
 import { Highlight } from '../../../lib/networking/fragments/highlightFragment'
 import { HighlightView } from '../HighlightView'
+import { useRouter } from 'next/router'
+import { showErrorToast } from '../../../lib/toastHelpers'
+import { sortHighlights } from '../../../lib/highlights/sortHighlights'
+import { timeAgo } from '../../../lib/textFormatting'
 
 export const GridSeparator = styled(Box, {
   height: '1px',
@@ -28,41 +31,34 @@ export function LibraryHighlightGridCard(
   props: LibraryHighlightGridCardProps
 ): JSX.Element {
   const [expanded, setExpanded] = useState(false)
-
-  const higlightCount = props.item.highlights?.length ?? 0
+  const highlightCount = props.item.highlights?.length ?? 0
+  const router = useRouter()
+  const viewInReader = useCallback(
+    (highlightId: string) => {
+      if (!router || !router.isReady || !props.viewer) {
+        showErrorToast('Error navigating to highlight')
+        return
+      }
+      router.push(
+        {
+          pathname: '/[username]/[slug]',
+          query: {
+            username: props.viewer.profile.username,
+            slug: props.item.slug,
+          },
+          hash: highlightId,
+        },
+        `${props.viewer.profile.username}/${props.item.slug}#${highlightId}`,
+        {
+          scroll: false,
+        }
+      )
+    },
+    [router, props]
+  )
 
   const sortedHighlights = useMemo(() => {
-    const sorted = (a: number, b: number) => {
-      if (a < b) {
-        return -1
-      }
-      if (a > b) {
-        return 1
-      }
-      return 0
-    }
-
-    if (!props.item.highlights) {
-      return []
-    }
-
-    return props.item.highlights
-      .filter((h) => h.type === 'HIGHLIGHT')
-      .sort((a: Highlight, b: Highlight) => {
-        if (a.highlightPositionPercent && b.highlightPositionPercent) {
-          return sorted(a.highlightPositionPercent, b.highlightPositionPercent)
-        }
-        // We do this in a try/catch because it might be an invalid diff
-        // With PDF it will definitely be an invalid diff.
-        try {
-          const aPos = getHighlightLocation(a.patch)
-          const bPos = getHighlightLocation(b.patch)
-          if (aPos && bPos) {
-            return sorted(aPos, bPos)
-          }
-        } catch {}
-        return a.createdAt.localeCompare(b.createdAt)
-      })
+    return sortHighlights(props.item.highlights ?? [])
   }, [props.item.highlights])
 
   return (
@@ -123,14 +119,23 @@ export function LibraryHighlightGridCard(
           <>
             <GridSeparator css={{ width: '100%' }} />
             <VStack
-              css={{ height: '100%', width: '100%', mt: '20px' }}
+              css={{ height: '100%', width: '100%', mt: '20px', gap: '20px' }}
               distribution="start"
             >
               {sortedHighlights.map((highlight) => (
-                <SpanBox key={`hv-${highlight.id}`}>
+                <SpanBox key={`hv-${highlight.id}`} css={{ width: '100%' }}>
                   <HighlightView
                     key={highlight.id}
+                    viewer={props.viewer}
+                    item={props.item}
                     highlight={highlight}
+                    viewInReader={viewInReader}
+                    setLabelsTarget={() => {
+                      console.log('TODO: set labels')
+                    }}
+                    setShowConfirmDeleteHighlightId={() => {
+                      console.log('TODO: confirm delete')
+                    }}
                     updateHighlight={(highlight) => {
                       console.log('updated highlight: ', highlight)
                     }}
@@ -163,7 +168,9 @@ export function LibraryHighlightGridCard(
                 event.preventDefault()
               }}
             >
-              {`View ${higlightCount} highlight${higlightCount > 1 ? 's' : ''}`}
+              {`View ${highlightCount} highlight${
+                highlightCount > 1 ? 's' : ''
+              }`}
               <CaretDown
                 size={10}
                 weight="bold"

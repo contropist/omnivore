@@ -1,30 +1,28 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+import languages from '@cospired/i18n-iso-languages'
+import { countWords } from 'alfaaz'
 import crypto from 'crypto'
+import { FingerprintGenerator } from 'fingerprint-generator'
+import Redis from 'ioredis'
+import { parseHTML } from 'linkedom'
 import normalizeUrl from 'normalize-url'
 import path from 'path'
 import _ from 'underscore'
 import slugify from 'voca/slugify'
-import wordsCounter from 'word-counting'
-import { RegistrationType, UserData } from '../datalayer/user/model'
-import { updatePage } from '../elastic/pages'
-import { ArticleSavingRequestStatus, Page } from '../elastic/types'
-import { User } from '../entity/user'
-import {
-  ArticleSavingRequest,
-  CreateArticleError,
-  FeedArticle,
-  Profile,
-  ResolverFn,
-} from '../generated/graphql'
-import { CreateArticlesSuccessPartial } from '../resolvers'
-import { Claims, WithDataSourcesContext } from '../resolvers/types'
+import { LibraryItem, LibraryItemState } from '../entity/library_item'
+import { CreateArticleError } from '../generated/graphql'
+import { createPubSubClient } from '../pubsub'
 import { validateUrl } from '../services/create_page_save_request'
-import { Merge } from '../util'
+import { updateLibraryItem } from '../services/library_item'
+import { logger } from './logger'
 
 interface InputObject {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
 }
+
+export const TWEET_URL_REGEX =
+  /twitter\.com\/(?:#!\/)?(\w+)\/status(?:es)?\/(\d+)(?:\/.*)?/
 
 export const keysToCamelCase = (object: InputObject): InputObject => {
   Object.keys(object).forEach((key) => {
@@ -65,30 +63,6 @@ export const stringToHash = (str: string, convertToUUID = false): string => {
   ).toLowerCase()
 }
 
-export function authorized<
-  TSuccess,
-  TError extends { errorCodes: string[] },
-  /* eslint-disable @typescript-eslint/no-explicit-any */
-  TArgs = any,
-  TParent = any
-  /* eslint-enable @typescript-eslint/no-explicit-any */
->(
-  resolver: ResolverFn<
-    TSuccess | TError,
-    TParent,
-    WithDataSourcesContext & { claims: Claims },
-    TArgs
-  >
-): ResolverFn<TSuccess | TError, TParent, WithDataSourcesContext, TArgs> {
-  return (parent, args, ctx, info) => {
-    const { claims } = ctx
-    if (claims?.uid) {
-      return resolver(parent, args, { ...ctx, claims }, info)
-    }
-    return { errorCodes: ['UNAUTHORIZED'] } as TError
-  }
-}
-
 export const findDelimiter = (
   text: string,
   delimiters = ['\t', ',', ':', ';'],
@@ -110,99 +84,37 @@ export const findDelimiter = (
   return delimiter || defaultDelimiter
 }
 
-// FIXME: Remove this Date stub after nullable types will be fixed
-export const userDataToUser = (
-  user: Merge<
-    UserData,
-    {
-      isFriend?: boolean
-      followersCount?: number
-      friendsCount?: number
-      sharedArticlesCount?: number
-      sharedHighlightsCount?: number
-      sharedNotesCount?: number
-      viewerIsFollowing?: boolean
-    }
-  >
-): {
-  id: string
-  name: string
-  source: RegistrationType
-  email?: string | null
-  phone?: string | null
-  picture?: string | null
-  googleId?: string | null
-  createdAt: Date
-  isFriend?: boolean | null
-  isFullUser: boolean
-  viewerIsFollowing?: boolean | null
-  sourceUserId: string
-  friendsCount?: number
-  followersCount?: number
-  sharedArticles: FeedArticle[]
-  sharedArticlesCount?: number
-  sharedHighlightsCount?: number
-  sharedNotesCount?: number
-  profile: Profile
-} => ({
-  ...user,
-  name: user.name,
-  source: user.source as RegistrationType,
-  createdAt: user.createdAt || new Date(),
-  friendsCount: user.friendsCount || 0,
-  followersCount: user.followersCount || 0,
-  isFullUser: true,
-  viewerIsFollowing: user.viewerIsFollowing || user.isFriend || false,
-  picture: user.profile.picture_url,
-  sharedArticles: [],
-  sharedArticlesCount: user.sharedArticlesCount || 0,
-  sharedHighlightsCount: user.sharedHighlightsCount || 0,
-  sharedNotesCount: user.sharedNotesCount || 0,
-  profile: {
-    ...user.profile,
-    pictureUrl: user.profile.picture_url,
-  },
-})
-
 export const generateSlug = (title: string): string => {
   return slugify(title).substring(0, 64) + '-' + Date.now().toString(16)
 }
 
 export const MAX_CONTENT_LENGTH = 5e7 //50MB
 
-export const pageError = async (
+export const errorHandler = async (
   result: CreateArticleError,
-  ctx: WithDataSourcesContext,
-  pageId?: string | null
-): Promise<CreateArticleError | CreateArticlesSuccessPartial> => {
+  userId: string,
+  pageId?: string | null,
+  pubsub = createPubSubClient()
+): Promise<CreateArticleError> => {
   if (!pageId) return result
 
-  await updatePage(
+  await updateLibraryItem(
     pageId,
     {
-      state: ArticleSavingRequestStatus.Failed,
+      state: LibraryItemState.Failed,
     },
-    ctx
+    userId,
+    pubsub
   )
 
   return result
 }
 
-export const pageToArticleSavingRequest = (
-  user: User,
-  page: Page
-): ArticleSavingRequest => ({
-  ...page,
-  user: userDataToUser(user),
-  status: page.state,
-  updatedAt: page.updatedAt || new Date(),
-})
-
-export const isParsingTimeout = (page: Page): boolean => {
+export const isParsingTimeout = (libraryItem: LibraryItem): boolean => {
   return (
-    // page processed more than 30 seconds ago
-    page.state === ArticleSavingRequestStatus.Processing &&
-    new Date(page.savedAt).getTime() < new Date().getTime() - 1000 * 30
+    // item processed more than 30 seconds ago
+    libraryItem.state === LibraryItemState.Processing &&
+    libraryItem.savedAt.getTime() < new Date().getTime() - 1000 * 30
   )
 }
 
@@ -222,7 +134,7 @@ export const validatedDate = (
     }
     return new Date(date)
   } catch (e) {
-    console.log('error validating date', date, e)
+    logger.error('error validating date', { date, error: e })
     return undefined
   }
 }
@@ -244,7 +156,7 @@ export const titleForFilePath = (url: string): string => {
     const title = decodeURI(path.basename(new URL(url).pathname, '.pdf'))
     return title
   } catch (e) {
-    console.log(e)
+    logger.error(e)
   }
   return url
 }
@@ -265,9 +177,14 @@ export const wait = (ms: number): Promise<void> => {
   })
 }
 
-export const wordsCount = (text: string, isHtml = true): number => {
+export const wordsCount = (text: string, isHtml?: boolean): number => {
   try {
-    return wordsCounter(text, { isHtml }).wordsCount
+    if (isHtml) {
+      const dom = parseHTML(text).window.document
+      text = dom.body.textContent || ''
+    }
+
+    return countWords(text)
   } catch {
     return 0
   }
@@ -296,7 +213,81 @@ export const isUrl = (str: string): boolean => {
     validateUrl(str)
     return true
   } catch {
-    console.log('not an url', str)
+    logger.info('not an url', { url: str })
     return false
   }
+}
+
+export const cleanUrl = (url: string) => {
+  const trackingParams: (RegExp | string)[] = [/^utm_\w+/i] // remove utm tracking parameters
+  if (TWEET_URL_REGEX.test(url)) {
+    // remove tracking parameters from tweet links:
+    // https://twitter.com/omnivore/status/1673218959624093698?s=12&t=R91quPajs0E53Yds-fhv2g
+    trackingParams.push('s', 't')
+  }
+  return normalizeUrl(url, {
+    stripHash: true,
+    stripWWW: false,
+    removeQueryParameters: trackingParams,
+    removeTrailingSlash: false,
+  })
+}
+
+export const deepDelete = <T, K extends keyof T>(
+  obj: T,
+  keys: readonly K[]
+) => {
+  // make a copy of the object
+  const copy = { ...obj }
+
+  keys.forEach((key) => {
+    delete copy[key]
+  })
+
+  return copy as Omit<T, K>
+}
+
+export const isRelativeUrl = (url: string): boolean => {
+  return url.startsWith('/')
+}
+
+export const getAbsoluteUrl = (url: string, baseUrl: string): string => {
+  return new URL(url, baseUrl).href
+}
+
+export const setRecentlySavedItemInRedis = async (
+  redisClient: Redis,
+  userId: string,
+  url: string
+) => {
+  // save the url in redis for 26 hours so rss-feeder won't try to re-save it
+  const redisKey = `recent-saved-item:${userId}:${url}`
+  const ttlInSeconds = 60 * 60 * 26
+  try {
+    return await redisClient.set(redisKey, 1, 'EX', ttlInSeconds, 'NX')
+  } catch (error) {
+    logger.error('error setting recently saved item in redis', {
+      redisKey,
+      error,
+    })
+  }
+}
+
+export const getClientFromUserAgent = (userAgent: string): string => {
+  // for plugins, currently only obsidian and logseq are supported
+  const plugins = userAgent.match(/(obsidian|logseq)/i)
+  if (plugins) return plugins[0].toLowerCase()
+
+  // web browser
+  const browsers = userAgent.match(/(chrome|safari|firefox|edge|opera)/i)
+  if (browsers) return 'web'
+
+  return 'other'
+}
+
+export const lanaugeToCode = (language: string): string =>
+  languages.getAlpha2Code(language, 'en') || 'en'
+
+export const generateFingerprint = () => {
+  return new FingerprintGenerator().getFingerprint()
 }

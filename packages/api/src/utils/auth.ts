@@ -1,13 +1,16 @@
 import * as bcrypt from 'bcryptjs'
-import { v4 as uuidv4 } from 'uuid'
-import { Claims, ClaimsToSet } from '../resolvers/types'
-import { getRepository } from '../entity/utils'
-import { ApiKey } from '../entity/api_key'
 import crypto from 'crypto'
-import * as jwt from 'jsonwebtoken'
-import { env } from '../env'
 import express from 'express'
+import * as jwt from 'jsonwebtoken'
 import { promisify } from 'util'
+import { v4 as uuidv4, validate } from 'uuid'
+import { ApiKey } from '../entity/api_key'
+import { env } from '../env'
+import { redisDataSource } from '../redis_data_source'
+import { getRepository } from '../repository'
+import { Claims, ClaimsToSet } from '../resolvers/types'
+
+export const OmnivoreAuthorizationHeader = 'Omnivore-Authorization'
 
 const signToken = promisify(jwt.sign)
 
@@ -20,22 +23,29 @@ export const comparePassword = async (password: string, hash: string) => {
 }
 
 export const generateApiKey = (): string => {
-  // TODO: generate random string key
+  // generate random string key
   return uuidv4()
+}
+
+export const isApiKey = (key: string): boolean => {
+  // check if key in is uuid v4 format
+  return validate(key)
 }
 
 export const hashApiKey = (apiKey: string) => {
   return crypto.createHash('sha256').update(apiKey).digest('hex')
 }
 
-export const claimsFromApiKey = async (key: string): Promise<Claims> => {
-  const hashedKey = hashApiKey(key)
-  const apiKey = await getRepository(ApiKey).findOne({
-    where: {
+export const claimsFromApiKey = async (hashedKey: string): Promise<Claims> => {
+  const apiKeyRepo = getRepository(ApiKey)
+
+  const apiKey = await apiKeyRepo
+    .createQueryBuilder('apiKey')
+    .innerJoinAndSelect('apiKey.user', 'user')
+    .where({
       key: hashedKey,
-    },
-    relations: ['user'],
-  })
+    })
+    .getOne()
   if (!apiKey) {
     throw new Error('api key not found')
   }
@@ -47,13 +57,41 @@ export const claimsFromApiKey = async (key: string): Promise<Claims> => {
   }
 
   // update last used
-  await getRepository(ApiKey).update(apiKey.id, { usedAt: new Date() })
+  await apiKeyRepo.update(apiKey.id, { usedAt: new Date() })
 
   return {
     uid: apiKey.user.id,
     iat,
     exp,
   }
+}
+
+const claimsCacheKey = (hashedKey: string) => `api-key-hash:${hashedKey}`
+
+const getCachedClaims = async (
+  hashedKey: string
+): Promise<Claims | undefined> => {
+  const cache = await redisDataSource.redisClient?.get(
+    claimsCacheKey(hashedKey)
+  )
+  if (!cache) {
+    return undefined
+  }
+
+  return JSON.parse(cache) as Claims
+}
+
+const cacheClaims = async (hashedKey: string, claims: Claims) => {
+  await redisDataSource.redisClient?.set(
+    claimsCacheKey(hashedKey),
+    JSON.stringify(claims),
+    'EX',
+    claims.exp ? claims.exp - claims.iat : 3600 * 24 * 365 // default 1 year
+  )
+}
+
+export const deleteCachedClaims = async (key: string) => {
+  await redisDataSource.redisClient?.del(claimsCacheKey(key))
 }
 
 // verify jwt token first
@@ -63,40 +101,72 @@ export const claimsFromApiKey = async (key: string): Promise<Claims> => {
 export const getClaimsByToken = async (
   token: string | undefined
 ): Promise<Claims | undefined> => {
-  let claims: Claims | undefined
-
   if (!token) {
     return undefined
   }
 
-  try {
-    jwt.verify(token, env.server.jwtSecret) &&
-      (claims = jwt.decode(token) as Claims)
-
-    return claims
-  } catch (e) {
-    if (
-      e instanceof jwt.JsonWebTokenError &&
-      !(e instanceof jwt.TokenExpiredError)
-    ) {
-      console.log(`not a jwt token, checking api key`, { token })
-      return claimsFromApiKey(token)
+  if (isApiKey(token)) {
+    const hashedKey = hashApiKey(token)
+    const cachedClaims = await getCachedClaims(hashedKey)
+    if (cachedClaims) {
+      return cachedClaims
     }
 
-    throw e
+    const claims = await claimsFromApiKey(hashedKey)
+    await cacheClaims(hashedKey, claims)
+
+    return claims
   }
+
+  return jwt.verify(token, env.server.jwtSecret) as Claims
 }
 
-export const generateVerificationToken = (
-  userId: string,
-  expireInDays = 1
-): string => {
+const verificationTokenKey = (token: string) => `verification:${token}`
+
+export const verifyToken = async (token: string): Promise<Claims> => {
+  const redisClient = redisDataSource.redisClient
+  const key = verificationTokenKey(token)
+  if (redisClient) {
+    const cachedToken = await redisClient.get(key)
+    if (!cachedToken) {
+      throw new Error('Token not found')
+    }
+  }
+
+  const claims = jwt.verify(token, env.server.jwtSecret) as Claims
+  if (claims.destroyAfterUse) {
+    await redisClient?.del(key)
+  }
+
+  return claims
+}
+
+export const generateVerificationToken = async (
+  user: {
+    id: string
+    email?: string
+  },
+  expireInSeconds = 60, // 1 minute
+  destroyAfterUse = true
+): Promise<string> => {
   const iat = Math.floor(Date.now() / 1000)
   const exp = Math.floor(
-    new Date(Date.now() + 1000 * 60 * 60 * 24 * expireInDays).getTime() / 1000
+    new Date(Date.now() + expireInSeconds * 1000).getTime() / 1000
   )
 
-  return jwt.sign({ uid: userId, iat, exp }, env.server.jwtSecret)
+  const token = jwt.sign(
+    { uid: user.id, iat, exp, email: user.email, destroyAfterUse },
+    env.server.jwtSecret
+  )
+
+  await redisDataSource.redisClient?.set(
+    verificationTokenKey(token),
+    user.id,
+    'EX',
+    expireInSeconds
+  )
+
+  return token
 }
 
 export const setAuthInCookie = async (
@@ -111,4 +181,26 @@ export const setAuthInCookie = async (
     httpOnly: true,
     expires: new Date(new Date().getTime() + 365 * 24 * 60 * 60 * 1000),
   })
+}
+
+export const getTokenByRequest = (req: express.Request): string | undefined => {
+  return (
+    req.header(OmnivoreAuthorizationHeader) ||
+    req.headers.authorization ||
+    (req.cookies.auth as string | undefined)
+  )
+}
+
+export const isSystemRequest = (req: express.Request): boolean => {
+  const token = getTokenByRequest(req)
+  if (!token) {
+    return false
+  }
+
+  try {
+    const claims = jwt.verify(token, env.server.jwtSecret) as Claims
+    return !!claims.system
+  } catch (e) {
+    return false
+  }
 }

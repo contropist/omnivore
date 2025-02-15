@@ -5,15 +5,31 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
-  Unique,
   UpdateDateColumn,
 } from 'typeorm'
-import { User } from './user'
-import { SubscriptionStatus } from '../generated/graphql'
 import { NewsletterEmail } from './newsletter_email'
+import { User } from './user'
+
+export const DEFAULT_SUBSCRIPTION_FOLDER = 'following'
+
+export enum SubscriptionStatus {
+  Active = 'ACTIVE',
+  Deleted = 'DELETED',
+  Unsubscribed = 'UNSUBSCRIBED',
+}
+
+export enum SubscriptionType {
+  Newsletter = 'NEWSLETTER',
+  Rss = 'RSS',
+}
+
+export enum FetchContentType {
+  Always = 'ALWAYS',
+  Never = 'NEVER',
+  WhenEmpty = 'WHEN_EMPTY',
+}
 
 @Entity({ name: 'subscriptions' })
-@Unique(['name', 'user'])
 export class Subscription {
   @PrimaryGeneratedColumn('uuid')
   id!: string
@@ -31,9 +47,9 @@ export class Subscription {
   })
   status!: SubscriptionStatus
 
-  @ManyToOne(() => NewsletterEmail)
+  @ManyToOne(() => NewsletterEmail, { nullable: true })
   @JoinColumn({ name: 'newsletter_email_id' })
-  newsletterEmail!: NewsletterEmail
+  newsletterEmail?: NewsletterEmail | null
 
   @Column('text', { nullable: true })
   description?: string
@@ -48,11 +64,52 @@ export class Subscription {
   unsubscribeHttpUrl?: string
 
   @Column('text', { nullable: true })
-  icon?: string
+  icon?: string | null
 
-  @CreateDateColumn()
+  @Column('enum', {
+    enum: SubscriptionType,
+  })
+  type!: SubscriptionType
+
+  @Column('integer', { default: 0 })
+  count!: number
+
+  @Column('timestamp', { nullable: true })
+  mostRecentItemDate?: Date | null
+
+  @Column('text', { nullable: true })
+  lastFetchedChecksum?: string | null
+
+  @CreateDateColumn({ default: () => 'CURRENT_TIMESTAMP' })
   createdAt!: Date
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ default: () => 'CURRENT_TIMESTAMP' })
   updatedAt!: Date
+
+  @Column('timestamp', { nullable: true })
+  scheduledAt?: Date | null
+
+  @Column('timestamp', { nullable: true })
+  refreshedAt?: Date | null
+
+  @Column('timestamp', { nullable: true })
+  failedAt?: Date | null
+
+  @Column('boolean')
+  isPrivate?: boolean | null
+
+  @Column('boolean')
+  autoAddToLibrary?: boolean | null
+
+  @Column('boolean')
+  fetchContent!: boolean
+
+  @Column('enum', {
+    enum: FetchContentType,
+    default: FetchContentType.Always,
+  })
+  fetchContentType!: FetchContentType
+
+  @Column('text')
+  folder?: string | null
 }

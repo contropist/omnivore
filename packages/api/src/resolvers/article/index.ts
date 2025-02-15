@@ -4,29 +4,16 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-floating-promises */
 import { Readability } from '@omnivore/readability'
-import graphqlFields from 'graphql-fields'
-import normalizeUrl from 'normalize-url'
-import { searchHighlights } from '../../elastic/highlights'
 import {
-  createPage,
-  getPageByParam,
-  searchAsYouType,
-  searchPages,
-  updatePage,
-  updatePagesAsync,
-} from '../../elastic/pages'
-import {
-  ArticleSavingRequestStatus,
-  Page,
-  PageType,
-  SearchItem as SearchItemData,
-} from '../../elastic/types'
+  ContentReaderType,
+  LibraryItem,
+  LibraryItemState,
+} from '../../entity/library_item'
+import { User } from '../../entity/user'
 import { env } from '../../env'
 import {
-  Article,
   ArticleError,
   ArticleErrorCode,
-  ArticlesError,
   ArticleSuccess,
   BulkActionError,
   BulkActionErrorCode,
@@ -35,94 +22,103 @@ import {
   CreateArticleError,
   CreateArticleErrorCode,
   CreateArticleSuccess,
-  FeedArticle,
-  InputMaybe,
+  EmptyTrashError,
+  EmptyTrashSuccess,
+  FetchContentError,
+  FetchContentErrorCode,
+  FetchContentSuccess,
+  MoveToFolderError,
+  MoveToFolderErrorCode,
+  MoveToFolderSuccess,
   MutationBulkActionArgs,
   MutationCreateArticleArgs,
+  MutationFetchContentArgs,
+  MutationMoveToFolderArgs,
   MutationSaveArticleReadingProgressArgs,
   MutationSetBookmarkArticleArgs,
-  MutationSetShareArticleArgs,
+  MutationSetFavoriteArticleArgs,
   PageInfo,
+  PageType,
   QueryArticleArgs,
-  QueryArticlesArgs,
   QuerySearchArgs,
   QueryTypeaheadSearchArgs,
   QueryUpdatesSinceArgs,
-  ResolverFn,
   SaveArticleReadingProgressError,
   SaveArticleReadingProgressErrorCode,
   SaveArticleReadingProgressSuccess,
   SearchError,
   SearchErrorCode,
-  SearchItem,
+  SearchItemEdge,
   SearchSuccess,
   SetBookmarkArticleError,
   SetBookmarkArticleErrorCode,
   SetBookmarkArticleSuccess,
-  SetShareArticleError,
-  SetShareArticleErrorCode,
-  SetShareArticleSuccess,
-  SortParams,
+  SetFavoriteArticleError,
+  SetFavoriteArticleErrorCode,
+  SetFavoriteArticleSuccess,
   TypeaheadSearchError,
   TypeaheadSearchErrorCode,
-  TypeaheadSearchItem,
   TypeaheadSearchSuccess,
   UpdateReason,
   UpdatesSinceError,
-  UpdatesSinceErrorCode,
   UpdatesSinceSuccess,
 } from '../../generated/graphql'
+import { authTrx, getColumns } from '../../repository'
+import { getInternalLabelWithColor } from '../../repository/label'
+import { libraryItemRepository } from '../../repository/library_item'
+import { userRepository } from '../../repository/user'
+import { clearCachedReadingPosition } from '../../services/cached_reading_position'
 import { createPageSaveRequest } from '../../services/create_page_save_request'
-import { createLabels } from '../../services/labels'
-import { parsedContentToPage } from '../../services/save_page'
+import {
+  addLabelsToLibraryItem,
+  createAndSaveLabelsInLibraryItem,
+  findOrCreateLabels,
+} from '../../services/labels'
+import {
+  batchDelete,
+  batchUpdateLibraryItems,
+  countLibraryItems,
+  createOrUpdateLibraryItem,
+  deleteCachedTotalCount,
+  findLibraryItemsByPrefix,
+  SearchArgs,
+  searchLibraryItems,
+  softDeleteLibraryItem,
+  sortParamsToSort,
+  updateLibraryItem,
+  updateLibraryItemReadingProgress,
+} from '../../services/library_item'
+import { parsedContentToLibraryItem } from '../../services/save_page'
+import {
+  findUploadFileById,
+  itemTypeForContentType,
+  setFileUploadComplete,
+} from '../../services/upload_file'
 import { traceAs } from '../../tracing'
 import { Merge } from '../../util'
 import { analytics } from '../../utils/analytics'
 import { isSiteBlockedForParse } from '../../utils/blocked'
-import { ContentParseError } from '../../utils/errors'
+import { enqueueBulkAction } from '../../utils/createTask'
+import { authorized, isFieldInSelectionSet } from '../../utils/gql-utils'
 import {
-  authorized,
+  cleanUrl,
+  errorHandler,
   generateSlug,
-  isBase64Image,
   isParsingTimeout,
-  pageError,
   titleForFilePath,
-  userDataToUser,
-  validatedDate,
 } from '../../utils/helpers'
-import { createImageProxyUrl } from '../../utils/imageproxy'
 import {
-  contentConverter,
-  getDistillerResult,
   htmlToMarkdown,
   ParsedContentPuppeteer,
   parsePreparedContent,
 } from '../../utils/parser'
-import { parseSearchQuery, SortBy, SortOrder } from '../../utils/search'
-import {
-  contentReaderForPageType,
-  getStorageFileDetails,
-  makeStorageFilePublic,
-} from '../../utils/uploads'
-import { WithDataSourcesContext } from '../types'
-import { pageTypeForContentType } from '../upload_files'
+import { getStorageFileDetails } from '../../utils/uploads'
 
 export enum ArticleFormat {
   Markdown = 'markdown',
   Html = 'html',
-  Distiller = 'distiller',
   HighlightedMarkdown = 'highlightedMarkdown',
 }
-
-export type PartialArticle = Omit<
-  Article,
-  | 'updatedAt'
-  | 'readingProgressPercent'
-  | 'readingProgressAnchorIndex'
-  | 'savedAt'
-  | 'highlights'
-  | 'contentReader'
->
 
 // These two page types are better handled by the backend
 // where we can use APIs to fetch their underlying content.
@@ -133,12 +129,11 @@ const FORCE_PUPPETEER_URLS = [
 ]
 const UNPARSEABLE_CONTENT = '<p>We were unable to parse this page.</p>'
 
-export type CreateArticlesSuccessPartial = Merge<
-  CreateArticleSuccess,
-  { createdArticle: PartialArticle }
->
 export const createArticleResolver = authorized<
-  CreateArticlesSuccessPartial,
+  Merge<
+    CreateArticleSuccess,
+    { user: User; createdArticle: Partial<LibraryItem> }
+  >,
   CreateArticleError,
   MutationCreateArticleArgs
 >(
@@ -148,25 +143,22 @@ export const createArticleResolver = authorized<
       input: {
         url,
         preparedDocument,
-        articleSavingRequestId: pageId,
+        articleSavingRequestId,
         uploadFileId,
         skipParsing,
         source,
         state,
         labels: inputLabels,
+        folder,
+        rssFeedUrl,
+        savedAt,
+        publishedAt,
       },
     },
-    ctx
+    { log, uid, pubsub }
   ) => {
-    const {
-      models,
-      authTrx,
-      claims: { uid },
-      log,
-    } = ctx
-
-    analytics.track({
-      userId: uid,
+    analytics.capture({
+      distinctId: uid,
       event: 'link_saved',
       properties: {
         url,
@@ -175,18 +167,31 @@ export const createArticleResolver = authorized<
       },
     })
 
-    const user = userDataToUser(await models.user.get(uid))
+    const user = await userRepository.findById(uid)
+    if (!user) {
+      return errorHandler(
+        {
+          errorCodes: [CreateArticleErrorCode.Unauthorized],
+        },
+        uid,
+        articleSavingRequestId,
+        pubsub
+      )
+    }
+
     try {
       if (isSiteBlockedForParse(url)) {
-        return pageError(
+        return errorHandler(
           {
             errorCodes: [CreateArticleErrorCode.NotAllowedToParse],
           },
-          ctx,
-          pageId
+          uid,
+          articleSavingRequestId,
+          pubsub
         )
       }
 
+      url = cleanUrl(url)
       const { pathname } = new URL(url)
 
       const croppedPathname = decodeURIComponent(
@@ -200,10 +205,9 @@ export const createArticleResolver = authorized<
       let title: string | undefined
       let parsedContent: Readability.ParseResult | null = null
       let canonicalUrl
-      let userArticleUrl: string | null = null
       let uploadFileHash = null
       let domContent = null
-      let pageType = PageType.Unknown
+      let itemType = PageType.Unknown
 
       const DUMMY_RESPONSE = {
         user,
@@ -212,48 +216,35 @@ export const createArticleResolver = authorized<
           id: '',
           slug: '',
           createdAt: new Date(),
-          originalHtml: domContent,
-          content: '',
+          originalContent: domContent,
+          readableContent: '',
           description: '',
           title: '',
-          pageType: PageType.Unknown,
-          contentReader: ContentReader.Web,
+          itemType,
+          contentReader: ContentReaderType.WEB,
           author: '',
-          url: normalizeUrl(canonicalUrl || url, {
-            stripHash: true,
-            stripWWW: false,
-          }),
-          hash: '',
-          isArchived: false,
+          originalUrl: url,
+          textContentHash: '',
+          highlights: [],
+          savedAt: savedAt || new Date(),
+          updatedAt: new Date(),
+          folder: '',
+          publishedAt,
+          subscription: rssFeedUrl,
         },
       }
-      // save state
-      let archivedAt =
-        state === ArticleSavingRequestStatus.Archived ? new Date() : null
-      if (pageId) {
-        const reminder = await models.reminder.getByRequestId(uid, pageId)
-        if (reminder && reminder.archiveUntil) {
-          archivedAt = new Date()
-        }
-      }
-      // add labels to page
-      const labels = inputLabels
-        ? await createLabels(ctx, inputLabels)
-        : undefined
 
       if (uploadFileId) {
         /* We do not trust the values from client, lookup upload file by querying
          * with filtering on user ID and URL to verify client's uploadFileId is valid.
          */
-        const uploadFile = await models.uploadFile.getWhere({
-          id: uploadFileId,
-          userId: uid,
-        })
+        const uploadFile = await findUploadFileById(uploadFileId)
         if (!uploadFile) {
-          return pageError(
+          return errorHandler(
             { errorCodes: [CreateArticleErrorCode.UploadFileMissing] },
-            ctx,
-            pageId
+            uid,
+            articleSavingRequestId,
+            pubsub
           )
         }
         const uploadFileDetails = await getStorageFileDetails(
@@ -261,15 +252,23 @@ export const createArticleResolver = authorized<
           uploadFile.fileName
         )
         uploadFileHash = uploadFileDetails.md5Hash
-        userArticleUrl = uploadFileDetails.fileUrl
         canonicalUrl = uploadFile.url
-        pageType = pageTypeForContentType(uploadFile.contentType)
+        itemType = itemTypeForContentType(uploadFile.contentType)
         title = titleForFilePath(uploadFile.url)
       } else if (
         source !== 'puppeteer-parse' &&
         FORCE_PUPPETEER_URLS.some((regex) => regex.test(url))
       ) {
-        await createPageSaveRequest({ userId: uid, url, archivedAt, labels })
+        await createPageSaveRequest({
+          user: user,
+          url,
+          state: state || undefined,
+          labels: inputLabels || undefined,
+          folder: folder || undefined,
+          savedAt,
+          publishedAt,
+          subscription: rssFeedUrl || undefined,
+        })
         return DUMMY_RESPONSE
       } else if (!skipParsing && preparedDocument?.document) {
         const parseResults = await traceAs<Promise<ParsedContentPuppeteer>>(
@@ -281,483 +280,188 @@ export const createArticleResolver = authorized<
         parsedContent = parseResults.parsedContent
         canonicalUrl = parseResults.canonicalUrl
         domContent = parseResults.domContent
-        pageType = parseResults.pageType
+        itemType = parseResults.pageType
       } else if (!preparedDocument?.document) {
         // We have a URL but no document, so we try to send this to puppeteer
         // and return a dummy response.
-        await createPageSaveRequest({ userId: uid, url, archivedAt, labels })
+        await createPageSaveRequest({
+          user,
+          url,
+          state: state || undefined,
+          labels: inputLabels || undefined,
+          folder: folder || undefined,
+          savedAt,
+          publishedAt,
+          subscription: rssFeedUrl || undefined,
+        })
         return DUMMY_RESPONSE
       }
 
-      const saveTime = new Date()
       const slug = generateSlug(parsedContent?.title || croppedPathname)
-      const articleToSave = parsedContentToPage({
+      const libraryItemToSave = parsedContentToLibraryItem({
         url,
         title,
         parsedContent,
         userId: uid,
-        pageId,
         slug,
         croppedPathname,
         originalHtml: domContent,
-        pageType,
+        itemType,
         preparedDocument,
         uploadFileHash,
         canonicalUrl,
         uploadFileId,
-        saveTime,
-      })
-
-      log.info('New article saving', {
-        parsedArticle: Object.assign({}, articleToSave, {
-          content: undefined,
-          originalHtml: undefined,
-        }),
-        userArticleUrl,
-        labels: {
-          source: 'resolver',
-          resolver: 'createArticleResolver',
-          userId: uid,
-        },
+        state,
+        folder,
+        publishedAt,
+        rssFeedUrl,
+        savedAt,
       })
 
       if (uploadFileId) {
-        const uploadFileData = await authTrx(async (tx) => {
-          return models.uploadFile.setFileUploadComplete(uploadFileId, tx)
-        })
+        const uploadFileData = await setFileUploadComplete(uploadFileId)
         if (!uploadFileData || !uploadFileData.id || !uploadFileData.fileName) {
-          return pageError(
+          return errorHandler(
             {
               errorCodes: [CreateArticleErrorCode.UploadFileMissing],
             },
-            ctx,
-            pageId
+            uid,
+            articleSavingRequestId,
+            pubsub
           )
         }
-        await makeStorageFilePublic(uploadFileData.id, uploadFileData.fileName)
       }
-      // save page's state and labels
-      articleToSave.archivedAt = archivedAt
-      articleToSave.labels = labels
-      if (
-        pageId ||
-        (pageId = (
-          await getPageByParam({
-            userId: uid,
-            url: articleToSave.url,
-          })
-        )?.id)
-      ) {
-        // update existing page's state from processing to succeeded
-        const updated = await updatePage(pageId, articleToSave, {
-          ...ctx,
-          uid,
-        })
 
-        if (!updated) {
-          return pageError(
-            {
-              errorCodes: [CreateArticleErrorCode.ElasticError],
-            },
-            ctx,
-            pageId
-          )
-        }
-      } else {
-        // create new page in elastic
-        const newPageId = await createPage(articleToSave, { ...ctx, uid })
-        if (!newPageId) {
-          return pageError(
-            {
-              errorCodes: [CreateArticleErrorCode.ElasticError],
-            },
-            ctx,
-            pageId
-          )
-        }
-        articleToSave.id = newPageId
-      }
-      log.info(
-        'page created in elastic',
-        articleToSave.id,
-        articleToSave.url,
-        articleToSave.slug,
-        articleToSave.title
+      // create new item in database
+      const libraryItemToReturn = await createOrUpdateLibraryItem(
+        libraryItemToSave,
+        uid,
+        pubsub
       )
 
-      const createdArticle: PartialArticle = {
-        ...articleToSave,
-        isArchived: !!articleToSave.archivedAt,
-      }
+      await createAndSaveLabelsInLibraryItem(
+        libraryItemToReturn.id,
+        uid,
+        inputLabels,
+        rssFeedUrl
+      )
+
       return {
         user,
-        created: false,
-        createdArticle: createdArticle,
+        created: true,
+        createdArticle: libraryItemToReturn,
       }
     } catch (error) {
-      if (
-        error instanceof ContentParseError &&
-        error.message === 'UNABLE_TO_PARSE'
-      ) {
-        return pageError(
-          { errorCodes: [CreateArticleErrorCode.UnableToParse] },
-          ctx,
-          pageId
-        )
-      }
-      throw error
+      log.error('Error creating article', error)
+      return errorHandler(
+        {
+          errorCodes: [CreateArticleErrorCode.ElasticError],
+        },
+        uid,
+        articleSavingRequestId,
+        pubsub
+      )
     }
   }
 )
 
-export type ArticleSuccessPartial = Merge<
-  ArticleSuccess,
-  { article: PartialArticle }
->
-export const getArticleResolver: ResolverFn<
-  ArticleSuccessPartial | ArticleError,
-  Record<string, unknown>,
-  WithDataSourcesContext,
+export const getArticleResolver = authorized<
+  Merge<ArticleSuccess, { article: LibraryItem }>,
+  ArticleError,
   QueryArticleArgs
-> = async (_obj, { slug, format }, { claims }, info) => {
+>(async (_obj, { slug, format }, { uid, log }) => {
   try {
-    if (!claims?.uid) {
-      return { errorCodes: [ArticleErrorCode.Unauthorized] }
-    }
+    const selectColumns = getColumns(libraryItemRepository)
 
-    const includeOriginalHtml =
-      format === ArticleFormat.Distiller ||
-      !!graphqlFields(info).article.originalHtml
+    const libraryItem = await authTrx(
+      (tx) => {
+        const qb = tx
+          .createQueryBuilder(LibraryItem, 'libraryItem')
+          .select(selectColumns.map((column) => `libraryItem.${column}`))
+          .leftJoinAndSelect('libraryItem.labels', 'labels')
+          .leftJoinAndSelect('libraryItem.highlights', 'highlights')
+          .leftJoinAndSelect('highlights.labels', 'highlights_labels')
+          .leftJoinAndSelect('highlights.user', 'highlights_user')
+          .leftJoinAndSelect(
+            'highlights_user.profile',
+            'highlights_user_profile'
+          )
+          .leftJoinAndSelect('libraryItem.uploadFile', 'uploadFile')
+          .leftJoinAndSelect('libraryItem.recommendations', 'recommendations')
+          .leftJoinAndSelect('recommendations.group', 'recommendations_group')
+          .leftJoinAndSelect(
+            'recommendations.recommender',
+            'recommendations_recommender'
+          )
+          .leftJoinAndSelect(
+            'recommendations_recommender.profile',
+            'recommendations_recommender_profile'
+          )
+          .where('libraryItem.user_id = :uid', { uid })
 
-    analytics.track({
-      userId: claims?.uid,
-      event: 'link_fetched',
-      properties: {
-        slug,
-        env: env.server.apiEnv,
+        // We allow the backend to use the ID instead of a slug to fetch the article
+        // query against id if slug is a uuid
+        slug.match(/^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i)
+          ? qb.andWhere('libraryItem.id = :id', { id: slug })
+          : qb.andWhere('libraryItem.slug = :slug', { slug })
+
+        return qb.getOne()
       },
-    })
+      {
+        replicationMode: 'replica',
+      }
+    )
 
-    // We allow the backend to use the ID instead of a slug to fetch the article
-    const page =
-      (await getPageByParam(
-        {
-          userId: claims.uid,
-          slug,
-        },
-        includeOriginalHtml
-      )) ||
-      (await getPageByParam(
-        {
-          userId: claims.uid,
-          _id: slug,
-        },
-        includeOriginalHtml
-      ))
-
-    if (!page || page.state === ArticleSavingRequestStatus.Deleted) {
+    if (!libraryItem) {
       return { errorCodes: [ArticleErrorCode.NotFound] }
     }
 
-    if (isParsingTimeout(page)) {
-      page.content = UNPARSEABLE_CONTENT
+    if (isParsingTimeout(libraryItem)) {
+      libraryItem.readableContent = UNPARSEABLE_CONTENT
     }
 
     if (format === ArticleFormat.Markdown) {
-      page.content = htmlToMarkdown(page.content)
-    } else if (format === ArticleFormat.Distiller) {
-      if (!page.originalHtml) {
-        return { errorCodes: [ArticleErrorCode.BadData] }
-      }
-      const distillerResult = await getDistillerResult(
-        claims.uid,
-        page.originalHtml
-      )
-      if (!distillerResult) {
-        return { errorCodes: [ArticleErrorCode.BadData] }
-      }
-      page.content = distillerResult
+      libraryItem.readableContent = htmlToMarkdown(libraryItem.readableContent)
     }
 
     return {
-      article: { ...page, isArchived: !!page.archivedAt, linkId: page.id },
+      article: libraryItem,
     }
   } catch (error) {
-    console.log(error)
+    log.error(error)
     return { errorCodes: [ArticleErrorCode.BadData] }
-  }
-}
-
-type PaginatedPartialArticles = {
-  edges: { cursor: string; node: PartialArticle }[]
-  pageInfo: PageInfo
-}
-
-export const getArticlesResolver = authorized<
-  PaginatedPartialArticles,
-  ArticlesError,
-  QueryArticlesArgs
->(async (_obj, params, { claims }) => {
-  const startCursor = params.after || ''
-  const first = params.first || 10
-
-  const searchQuery = parseSearchQuery(params.query || undefined)
-
-  analytics.track({
-    userId: claims.uid,
-    event: 'get_articles',
-    properties: {
-      env: env.server.apiEnv,
-      ...searchQuery,
-    },
-  })
-
-  const [pages, totalCount] = (await searchPages(
-    {
-      from: Number(startCursor),
-      size: first + 1, // fetch one more item to get next cursor
-      sort: searchQuery.sortParams,
-      includePending: params.includePending,
-      ...searchQuery,
-    },
-    claims.uid
-  )) || [[], 0]
-
-  const start =
-    startCursor && !isNaN(Number(startCursor)) ? Number(startCursor) : 0
-  const hasNextPage = pages.length > first
-  const endCursor = String(start + pages.length - (hasNextPage ? 1 : 0))
-
-  console.log(
-    'start',
-    start,
-    'returning end cursor',
-    endCursor,
-    'length',
-    pages.length - 1
-  )
-
-  //TODO: refactor so that the lastCursor included
-  if (hasNextPage) {
-    // remove an extra if exists
-    pages.pop()
-  }
-
-  const edges = pages.map((a) => {
-    return {
-      node: {
-        ...a,
-        image: a.image && createImageProxyUrl(a.image, 260, 260),
-        isArchived: !!a.archivedAt,
-      },
-      cursor: endCursor,
-    }
-  })
-  return {
-    edges,
-    pageInfo: {
-      hasPreviousPage: false,
-      startCursor,
-      hasNextPage: hasNextPage,
-      endCursor,
-      totalCount,
-    },
   }
 })
 
-export type SetShareArticleSuccessPartial = Merge<
-  SetShareArticleSuccess,
-  {
-    updatedFeedArticle?: Omit<
-      FeedArticle,
-      | 'sharedBy'
-      | 'article'
-      | 'highlightsCount'
-      | 'annotationsCount'
-      | 'reactions'
-    >
-    updatedFeedArticleId?: string
-    updatedArticle: PartialArticle
-  }
->
-
-export const setShareArticleResolver = authorized<
-  SetShareArticleSuccessPartial,
-  SetShareArticleError,
-  MutationSetShareArticleArgs
->(
-  async (
-    _,
-    { input: { articleID, share, sharedComment, sharedWithHighlights } },
-    { models, authTrx, claims: { uid }, log }
-  ) => {
-    const article = await models.article.get(articleID)
-    if (!article) {
-      return { errorCodes: [SetShareArticleErrorCode.NotFound] }
-    }
-
-    const sharedAt = share ? new Date() : null
-
-    log.info(`${share ? 'S' : 'Uns'}haring an article`, {
-      article: Object.assign({}, article, {
-        content: undefined,
-        originalHtml: undefined,
-        sharedAt,
-      }),
-      labels: {
-        source: 'resolver',
-        resolver: 'setShareArticleResolver',
-        articleId: article.id,
-        userId: uid,
-      },
-    })
-
-    const result = await authTrx((tx) =>
-      models.userArticle.updateByArticleId(
-        uid,
-        articleID,
-        { sharedAt, sharedComment, sharedWithHighlights },
-        tx
-      )
-    )
-
-    if (!result) {
-      return { errorCodes: [SetShareArticleErrorCode.NotFound] }
-    }
-
-    // Make sure article.id instead of userArticle.id has passed. We use it for cache updates
-    const updatedArticle = {
-      ...result,
-      ...article,
-      postedByViewer: !!sharedAt,
-    }
-    const updatedFeedArticle = sharedAt ? { ...result, sharedAt } : undefined
-    return {
-      updatedFeedArticleId: result.id,
-      updatedFeedArticle,
-      updatedArticle,
-    }
-  }
-)
-
-export type SetBookmarkArticleSuccessPartial = Merge<
-  SetBookmarkArticleSuccess,
-  { bookmarkedArticle: PartialArticle }
->
 export const setBookmarkArticleResolver = authorized<
-  SetBookmarkArticleSuccessPartial,
+  Merge<SetBookmarkArticleSuccess, { bookmarkedArticle: LibraryItem }>,
   SetBookmarkArticleError,
   MutationSetBookmarkArticleArgs
->(
-  async (
-    _,
-    { input: { articleID, bookmark } },
-    { claims: { uid }, log, pubsub }
-  ) => {
-    const page = await getPageByParam({
-      userId: uid,
-      _id: articleID,
-    })
-    if (!page) {
-      return { errorCodes: [SetBookmarkArticleErrorCode.NotFound] }
-    }
-
-    if (!bookmark) {
-      // delete the page and its metadata
-      const deleted = await updatePage(
-        page.id,
-        {
-          state: ArticleSavingRequestStatus.Deleted,
-          labels: [],
-          highlights: [],
-          readingProgressAnchorIndex: 0,
-          readingProgressPercent: 0,
-        },
-        { pubsub, uid }
-      )
-      if (!deleted) {
-        return { errorCodes: [SetBookmarkArticleErrorCode.NotFound] }
-      }
-
-      analytics.track({
-        userId: uid,
-        event: 'link_removed',
-        properties: {
-          url: page.url,
-          env: env.server.apiEnv,
-        },
-      })
-
-      log.info('Article unbookmarked', {
-        page: Object.assign({}, page, {
-          content: undefined,
-          originalHtml: undefined,
-        }),
-        labels: {
-          source: 'resolver',
-          resolver: 'setBookmarkArticleResolver',
-          userId: uid,
-          articleID,
-        },
-      })
-      // Make sure article.id instead of userArticle.id has passed. We use it for cache updates
-      return {
-        bookmarkedArticle: {
-          ...page,
-          isArchived: false,
-          savedByViewer: false,
-          postedByViewer: false,
-        },
-      }
-    } else {
-      try {
-        const pageUpdated: Partial<Page> = {
-          userId: uid,
-          slug: generateSlug(page.title),
-        }
-        const updated = await updatePage(articleID, pageUpdated, {
-          pubsub,
-          uid,
-        })
-        if (!updated) {
-          return { errorCodes: [SetBookmarkArticleErrorCode.NotFound] }
-        }
-
-        log.info('Article bookmarked', {
-          page: Object.assign({}, page, {
-            content: undefined,
-            originalHtml: undefined,
-          }),
-          labels: {
-            source: 'resolver',
-            resolver: 'setBookmarkArticleResolver',
-            userId: uid,
-          },
-        })
-
-        // Make sure article.id instead of userArticle.id has passed. We use it for cache updates
-        return {
-          bookmarkedArticle: {
-            ...pageUpdated,
-            ...page,
-            isArchived: false,
-            savedByViewer: true,
-            postedByViewer: false,
-          },
-        }
-      } catch (error) {
-        return { errorCodes: [SetBookmarkArticleErrorCode.BookmarkExists] }
-      }
-    }
+>(async (_, { input: { articleID } }, { uid, log, pubsub }) => {
+  if (!articleID) {
+    return { errorCodes: [SetBookmarkArticleErrorCode.NotFound] }
   }
-)
 
-export type SaveArticleReadingProgressSuccessPartial = Merge<
-  SaveArticleReadingProgressSuccess,
-  { updatedArticle: PartialArticle }
->
+  // delete the item and its metadata
+  const deletedLibraryItem = await softDeleteLibraryItem(articleID, uid, pubsub)
+
+  analytics.capture({
+    distinctId: uid,
+    event: 'link_removed',
+    properties: {
+      id: articleID,
+      env: env.server.apiEnv,
+    },
+  })
+
+  // Make sure article.id instead of userArticle.id has passed. We use it for cache updates
+  return {
+    bookmarkedArticle: deletedLibraryItem,
+  }
+})
+
 export const saveArticleReadingProgressResolver = authorized<
-  SaveArticleReadingProgressSuccessPartial,
+  Merge<SaveArticleReadingProgressSuccess, { updatedArticle: LibraryItem }>,
   SaveArticleReadingProgressError,
   MutationSaveArticleReadingProgressArgs
 >(
@@ -769,218 +473,171 @@ export const saveArticleReadingProgressResolver = authorized<
         readingProgressPercent,
         readingProgressAnchorIndex,
         readingProgressTopPercent,
+        force,
       },
     },
-    { claims: { uid }, pubsub }
+    { pubsub, uid, dataSources }
   ) => {
-    const page = await getPageByParam({ userId: uid, _id: id })
-
-    if (!page) {
-      return { errorCodes: [SaveArticleReadingProgressErrorCode.NotFound] }
-    }
-
     if (
       readingProgressPercent < 0 ||
       readingProgressPercent > 100 ||
       (readingProgressTopPercent &&
         (readingProgressTopPercent < 0 ||
           readingProgressTopPercent > readingProgressPercent)) ||
-      readingProgressAnchorIndex < 0
+      (readingProgressAnchorIndex && readingProgressAnchorIndex < 0)
     ) {
       return { errorCodes: [SaveArticleReadingProgressErrorCode.BadData] }
     }
-    // If we have a top percent, we only save it if it's greater than the current top percent
-    // or set to zero if the top percent is zero.
-    const readingProgressTopPercentToSave = readingProgressTopPercent
-      ? Math.max(readingProgressTopPercent, page.readingProgressTopPercent || 0)
-      : readingProgressTopPercent === 0
-      ? 0
-      : undefined
-    // If setting to zero we accept the update, otherwise we require it
-    // be greater than the current reading progress.
-    const updatedPart = {
-      readingProgressPercent:
-        readingProgressPercent === 0
-          ? 0
-          : Math.max(readingProgressPercent, page.readingProgressPercent),
-      readingProgressAnchorIndex:
-        readingProgressAnchorIndex === 0
-          ? 0
-          : Math.max(
-              readingProgressAnchorIndex,
-              page.readingProgressAnchorIndex
-            ),
-      readingProgressTopPercent: readingProgressTopPercentToSave,
-      readAt: new Date(),
+
+    // We don't need to update the values of reading progress here
+    // because the function resolver will handle that for us when
+    // it resolves the properties of the Article object
+    let updatedItem = await authTrx(
+      (tx) =>
+        tx.getRepository(LibraryItem).findOne({
+          where: {
+            id,
+          },
+          relations: ['user'],
+        }),
+      {
+        replicationMode: 'replica',
+      }
+    )
+    if (!updatedItem) {
+      return {
+        errorCodes: [SaveArticleReadingProgressErrorCode.Unauthorized],
+      }
     }
-    const updated = await updatePage(id, updatedPart, { pubsub, uid })
-    if (!updated) {
-      return { errorCodes: [SaveArticleReadingProgressErrorCode.NotFound] }
+
+    if (env.redis.cache && force) {
+      // clear any cached values.
+      await clearCachedReadingPosition(uid, id)
+    }
+
+    if (env.redis.cache && env.redis.mq && !force) {
+      // If redis caching and queueing are available we delay this write
+      const updatedProgress =
+        await dataSources.readingProgress.updateReadingProgress(uid, id, {
+          readingProgressPercent,
+          readingProgressTopPercent: readingProgressTopPercent ?? undefined,
+          readingProgressAnchorIndex: readingProgressAnchorIndex ?? undefined,
+        })
+      if (updatedProgress) {
+        updatedItem.readAt = new Date()
+        updatedItem.readingProgressBottomPercent =
+          updatedProgress.readingProgressPercent
+        updatedItem.readingProgressTopPercent =
+          updatedProgress.readingProgressTopPercent || 0
+        updatedItem.readingProgressHighestReadAnchor =
+          updatedProgress.readingProgressAnchorIndex || 0
+      }
+    } else {
+      if (force) {
+        // update reading progress without checking the current value
+        updatedItem = await updateLibraryItem(
+          id,
+          {
+            readingProgressBottomPercent: readingProgressPercent,
+            readingProgressTopPercent: readingProgressTopPercent ?? undefined,
+            readingProgressHighestReadAnchor:
+              readingProgressAnchorIndex ?? undefined,
+            readAt: new Date(),
+          },
+          uid,
+          pubsub
+        )
+      } else {
+        updatedItem = await updateLibraryItemReadingProgress(
+          id,
+          uid,
+          readingProgressPercent,
+          readingProgressTopPercent,
+          readingProgressAnchorIndex
+        )
+
+        if (!updatedItem) {
+          return {
+            errorCodes: [SaveArticleReadingProgressErrorCode.BadData],
+          }
+        }
+      }
     }
 
     return {
-      updatedArticle: {
-        ...page,
-        ...updatedPart,
-        isArchived: !!page.archivedAt,
-      },
+      updatedArticle: updatedItem,
     }
   }
 )
 
-export const getReadingProgressForArticleResolver: ResolverFn<
-  number | { errorCodes: string[] },
-  Article,
-  WithDataSourcesContext,
-  Record<string, unknown>
-> = async (article, _params, { claims }) => {
-  if (!claims?.uid) {
-    return 0
-  }
-
-  if (
-    article.readingProgressPercent !== undefined &&
-    article.readingProgressPercent !== null
-  ) {
-    return article.readingProgressPercent
-  }
-
-  const articleReadingProgress = (
-    await getPageByParam({ userId: claims.uid, _id: article.id })
-  )?.readingProgressPercent
-
-  return articleReadingProgress || 0
-}
-
-export const getReadingProgressAnchorIndexForArticleResolver: ResolverFn<
-  number | { errorCodes: string[] },
-  Article,
-  WithDataSourcesContext,
-  Record<string, unknown>
-> = async (article, _params, { claims }) => {
-  if (!claims?.uid) {
-    return 0
-  }
-
-  if (
-    article.readingProgressAnchorIndex !== undefined &&
-    article.readingProgressAnchorIndex !== null
-  ) {
-    return article.readingProgressAnchorIndex
-  }
-
-  const articleReadingProgressAnchorIndex = (
-    await getPageByParam({ userId: claims.uid, _id: article.id })
-  )?.readingProgressAnchorIndex
-
-  return articleReadingProgressAnchorIndex || 0
-}
-
+export type PartialLibraryItem = Merge<LibraryItem, { format?: string }>
+type PartialSearchItemEdge = Merge<SearchItemEdge, { node: PartialLibraryItem }>
+export type PartialPageInfo = Merge<
+  PageInfo,
+  { searchLibraryItemArgs?: SearchArgs }
+>
 export const searchResolver = authorized<
-  SearchSuccess,
+  Merge<
+    SearchSuccess,
+    { edges: Array<PartialSearchItemEdge>; pageInfo: PartialPageInfo }
+  >,
   SearchError,
   QuerySearchArgs
->(async (_obj, params, { claims }) => {
+>(async (_obj, params, { uid }, info) => {
   const startCursor = params.after || ''
-  const first = params.first || 10
+  const first = Math.min(params.first || 10, 100) // limit to 100 items
 
   // the query size is limited to 255 characters
   if (params.query && params.query.length > 255) {
     return { errorCodes: [SearchErrorCode.QueryTooLong] }
   }
 
-  const searchQuery = parseSearchQuery(params.query || undefined)
+  const selectionSet = info.fieldNodes[0].selectionSet
+  const isContentRequested = selectionSet
+    ? isFieldInSelectionSet(selectionSet, 'content')
+    : false
 
-  analytics.track({
-    userId: claims.uid,
-    event: 'search',
-    properties: {
-      env: env.server.apiEnv,
-      ...searchQuery,
-    },
-  })
-
-  let results: SearchItemData[]
-  let totalCount: number
-
-  const searchType = searchQuery.typeFilter
-  // search highlights if type:highlights
-  if (searchType === PageType.Highlights) {
-    ;[results, totalCount] = (await searchHighlights(
-      {
-        from: Number(startCursor),
-        size: first + 1, // fetch one more item to get next cursor
-        sort: searchQuery.sortParams,
-        query: searchQuery.query,
-      },
-      claims.uid
-    )) || [[], 0]
-  } else {
-    // otherwise, search pages
-    ;[results, totalCount] = (await searchPages(
-      {
-        from: Number(startCursor),
-        size: first + 1, // fetch one more item to get next cursor
-        sort: searchQuery.sortParams,
-        includePending: true,
-        includeContent: params.includeContent ?? false,
-        ...searchQuery,
-      },
-      claims.uid
-    )) || [[], 0]
+  const searchLibraryItemArgs = {
+    includePending: true,
+    includeContent: params.includeContent || isContentRequested,
+    includeDeleted: params.query?.includes('in:trash'),
+    query: params.query,
+    useFolders: params.query?.includes('use:folders'),
   }
+
+  const libraryItems = await searchLibraryItems(
+    {
+      ...searchLibraryItemArgs,
+      from: Number(startCursor),
+      size: first + 1, // fetch one more item to get next cursor
+    },
+    uid
+  )
 
   const start =
     startCursor && !isNaN(Number(startCursor)) ? Number(startCursor) : 0
-  const hasNextPage = results.length > first
-  const endCursor = String(start + results.length - (hasNextPage ? 1 : 0))
+  const hasNextPage = libraryItems.length > first
+  const endCursor = String(start + libraryItems.length - (hasNextPage ? 1 : 0))
 
   if (hasNextPage) {
     // remove an extra if exists
-    results.pop()
+    libraryItems.pop()
   }
 
-  const edges = results.map((r) => {
-    let siteIcon = r.siteIcon
-    if (siteIcon && !isBase64Image(siteIcon)) {
-      siteIcon = createImageProxyUrl(siteIcon, 128, 128)
-    }
-    if (params.includeContent && r.content) {
-      // convert html to the requested format
-      const format = params.format || ArticleFormat.Html
-      try {
-        const converter = contentConverter(format)
-        if (converter) {
-          r.content = converter(r.content, r.highlights)
-        }
-      } catch (error) {
-        console.log('Error converting content', error)
-      }
-    }
-
-    return {
-      node: {
-        ...r,
-        image: r.image && createImageProxyUrl(r.image, 260, 260),
-        isArchived: !!r.archivedAt,
-        contentReader: contentReaderForPageType(r.pageType),
-        originalArticleUrl: r.url,
-        publishedAt: validatedDate(r.publishedAt),
-        ownedByViewer: r.userId === claims.uid,
-        siteIcon,
-      } as SearchItem,
-      cursor: endCursor,
-    }
-  })
-
   return {
-    edges,
+    edges: libraryItems.map((item) => ({
+      node: {
+        ...item,
+        format: params.format || undefined,
+      },
+      cursor: endCursor,
+    })),
     pageInfo: {
       hasPreviousPage: false,
       startCursor,
-      hasNextPage: hasNextPage,
+      hasNextPage,
       endCursor,
-      totalCount,
+      searchLibraryItemArgs,
     },
   }
 })
@@ -989,170 +646,367 @@ export const typeaheadSearchResolver = authorized<
   TypeaheadSearchSuccess,
   TypeaheadSearchError,
   QueryTypeaheadSearchArgs
->(async (_obj, { query, first }, { claims }) => {
-  if (!claims?.uid) {
+>(async (_obj, { query, first }, { log, uid }) => {
+  try {
+    const items = await findLibraryItemsByPrefix(query, uid, first || undefined)
+
+    return {
+      items: items.map((item) => ({
+        ...item,
+        contentReader: item.contentReader as unknown as ContentReader,
+      })),
+    }
+  } catch (error) {
+    log.error('typeaheadSearchResolver error', error)
     return { errorCodes: [TypeaheadSearchErrorCode.Unauthorized] }
   }
-
-  analytics.track({
-    userId: claims.uid,
-    event: 'typeahead',
-    properties: {
-      env: env.server.apiEnv,
-      query,
-      first,
-    },
-  })
-
-  const results = await searchAsYouType(claims.uid, query, first || undefined)
-  const items: TypeaheadSearchItem[] = results.map((r) => ({
-    ...r,
-    contentReader: contentReaderForPageType(r.pageType),
-  }))
-
-  return { items }
 })
 
 export const updatesSinceResolver = authorized<
-  UpdatesSinceSuccess,
+  Merge<
+    UpdatesSinceSuccess,
+    { edges: Array<PartialSearchItemEdge>; pageInfo: PartialPageInfo }
+  >,
   UpdatesSinceError,
   QueryUpdatesSinceArgs
->(
-  async (
-    _obj,
-    { since, first, after, sort: sortParams },
-    { claims: { uid } }
-  ) => {
-    if (!uid) {
-      return { errorCodes: [UpdatesSinceErrorCode.Unauthorized] }
-    }
-
-    analytics.track({
-      userId: uid,
-      event: 'updatesSince',
-      properties: {
-        env: env.server.apiEnv,
-        since,
-        first,
-        after,
-      },
-    })
-
-    const sort = sortParamsToElasticSort(sortParams)
-
-    const startCursor = after || ''
-    const size = first || 10
-    const startDate = new Date(since)
-    const [pages, totalCount] = (await searchPages(
-      {
-        from: Number(startCursor),
-        size: size + 1, // fetch one more item to get next cursor
-        includeDeleted: true,
-        dateFilters: [{ field: 'updatedAt', startDate }],
-        sort,
-      },
-      uid
-    )) || [[], 0]
-
-    const start =
-      startCursor && !isNaN(Number(startCursor)) ? Number(startCursor) : 0
-    const hasNextPage = pages.length > size
-    const endCursor = String(start + pages.length - (hasNextPage ? 1 : 0))
-
-    //TODO: refactor so that the lastCursor included
-    if (hasNextPage) {
-      // remove an extra if exists
-      pages.pop()
-    }
-
-    const edges = pages.map((p) => {
-      const updateReason = getUpdateReason(p, startDate)
-      return {
-        node: {
-          ...p,
-          image: p.image && createImageProxyUrl(p.image, 260, 260),
-          isArchived: !!p.archivedAt,
-          contentReader: contentReaderForPageType(p.pageType),
-        } as SearchItem,
-        cursor: endCursor,
-        itemID: p.id,
-        updateReason,
-      }
-    })
-
-    return {
-      edges,
-      pageInfo: {
-        hasPreviousPage: false,
-        startCursor,
-        hasNextPage,
-        endCursor,
-        totalCount,
-      },
-    }
+>(async (_obj, { since, first, after, sort: sortParams, folder }, { uid }) => {
+  const startCursor = after || ''
+  const size = Math.min(first || 10, 100) // limit to 100 items
+  let startDate = new Date(since)
+  if (isNaN(startDate.getTime())) {
+    // for android app compatibility
+    startDate = new Date(0)
   }
-)
+  const sort = sortParamsToSort(sortParams)
+
+  // create a search query
+  const query = `in:${
+    folder || 'all'
+  } updated:${startDate.toISOString()} sort:${sort.by}-${sort.order}`
+
+  const searchLibraryItemArgs = {
+    includeDeleted: true,
+    query,
+    includeContent: false,
+  }
+
+  const libraryItems = await searchLibraryItems(
+    {
+      ...searchLibraryItemArgs,
+      from: Number(startCursor),
+      size: size + 1, // fetch one more item to get next cursor
+      useFolders: true,
+    },
+    uid
+  )
+
+  const start =
+    startCursor && !isNaN(Number(startCursor)) ? Number(startCursor) : 0
+  const hasNextPage = libraryItems.length > size
+  const endCursor = String(start + libraryItems.length - (hasNextPage ? 1 : 0))
+
+  //TODO: refactor so that the lastCursor included
+  if (hasNextPage) {
+    // remove an extra if exists
+    libraryItems.pop()
+  }
+
+  const edges = libraryItems.map((item) => {
+    const updateReason = getUpdateReason(item, startDate)
+    return {
+      node: item,
+      cursor: endCursor,
+      itemID: item.id,
+      updateReason,
+    }
+  })
+
+  return {
+    edges,
+    pageInfo: {
+      hasPreviousPage: false,
+      startCursor,
+      hasNextPage,
+      endCursor,
+      searchLibraryItemArgs,
+    },
+  }
+})
 
 export const bulkActionResolver = authorized<
   BulkActionSuccess,
   BulkActionError,
   MutationBulkActionArgs
->(async (_parent, { action }, { claims: { uid }, log }) => {
-  log.info('bulkActionResolver')
+>(
+  async (
+    _parent,
+    { query, action, labelIds, arguments: args }, // arguments is a reserved keyword in JS
+    { uid, log }
+  ) => {
+    try {
+      analytics.capture({
+        distinctId: uid,
+        event: 'BulkAction',
+        properties: {
+          env: env.server.apiEnv,
+          action,
+        },
+      })
 
-  if (!uid) {
-    log.error('bulkActionResolver', { error: 'Unauthorized' })
-    return { errorCodes: [BulkActionErrorCode.Unauthorized] }
+      const batchSize = 20
+      const searchArgs = {
+        query,
+        includePending: true,
+        size: 0,
+      }
+      const count = await countLibraryItems(searchArgs, uid)
+      if (count === 0) {
+        log.info('No items found for bulk action')
+        return { success: true }
+      }
+
+      if (count <= batchSize) {
+        searchArgs.size = count
+        log.info('Bulk action: updating items synchronously', {
+          query,
+          action,
+          count,
+        })
+        // if there are less than batchSize items, update them synchronously
+        await batchUpdateLibraryItems(action, searchArgs, uid, labelIds, args)
+
+        await deleteCachedTotalCount(uid)
+
+        return { success: true }
+      }
+
+      // if there are more than batchSize items, update them asynchronously
+      const data = {
+        userId: uid,
+        action,
+        labelIds: labelIds || undefined,
+        query,
+        count,
+        args,
+        batchSize,
+      }
+      log.info('enqueue bulk action job', data)
+      const job = await enqueueBulkAction(data)
+      if (!job) {
+        return { errorCodes: [BulkActionErrorCode.BadRequest] }
+      }
+
+      await deleteCachedTotalCount(uid)
+
+      return { success: true }
+    } catch (error) {
+      log.error('bulkActionResolver error', error)
+      return { errorCodes: [BulkActionErrorCode.BadRequest] }
+    }
   }
+)
 
-  analytics.track({
-    userId: uid,
-    event: 'BulkAction',
+export const setFavoriteArticleResolver = authorized<
+  SetFavoriteArticleSuccess,
+  SetFavoriteArticleError,
+  MutationSetFavoriteArticleArgs
+>(async (_, { id }, { uid, log }) => {
+  try {
+    analytics.capture({
+      distinctId: uid,
+      event: 'setFavoriteArticle',
+      properties: {
+        env: env.server.apiEnv,
+        id,
+      },
+    })
+
+    const label = getInternalLabelWithColor('Favorites')
+    if (!label) {
+      return { errorCodes: [SetFavoriteArticleErrorCode.BadRequest] }
+    }
+
+    const labels = await findOrCreateLabels([label], uid)
+    // adds Favorites label to item
+    await addLabelsToLibraryItem(
+      labels.map((l) => l.id),
+      id,
+      uid,
+      'user'
+    )
+
+    return {
+      success: true,
+    }
+  } catch (error) {
+    log.info('Error adding Favorites label', error)
+    return { errorCodes: [SetFavoriteArticleErrorCode.BadRequest] }
+  }
+})
+
+export const moveToFolderResolver = authorized<
+  MoveToFolderSuccess,
+  MoveToFolderError,
+  MutationMoveToFolderArgs
+>(async (_, { id, folder }, { log, pubsub, uid }) => {
+  analytics.capture({
+    distinctId: uid,
+    event: 'move_to_folder',
     properties: {
-      env: env.server.apiEnv,
+      id,
+      folder,
     },
   })
 
-  // TODO: get search filters from query
+  const item = await authTrx(
+    (tx) =>
+      tx.getRepository(LibraryItem).findOne({
+        where: {
+          id,
+        },
+        relations: ['user'],
+      }),
+    {
+      replicationMode: 'replica',
+    }
+  )
 
-  // start a task to update pages
-  const taskId = await updatePagesAsync(uid, action)
-
-  return { success: !!taskId }
-})
-
-const getUpdateReason = (page: Page, since: Date) => {
-  if (page.state === ArticleSavingRequestStatus.Deleted) {
-    return UpdateReason.Deleted
-  }
-  if (page.createdAt >= since) {
-    return UpdateReason.Created
-  }
-  return UpdateReason.Updated
-}
-
-const sortParamsToElasticSort = (
-  sortParams: InputMaybe<SortParams> | undefined
-) => {
-  const sort = { by: SortBy.UPDATED, order: SortOrder.DESCENDING }
-
-  if (sortParams) {
-    sortParams.order === 'ASCENDING' && (sort.order = SortOrder.ASCENDING)
-    switch (sortParams.by) {
-      case 'UPDATED_TIME':
-        sort.by = SortBy.UPDATED
-        break
-      case 'SCORE':
-        sort.by = SortBy.SCORE
-        break
-      case 'PUBLISHED_AT':
-        sort.by = SortBy.PUBLISHED
-        break
-      case 'SAVED_AT':
-        sort.by = SortBy.SAVED
-        break
+  if (!item) {
+    return {
+      errorCodes: [MoveToFolderErrorCode.Unauthorized],
     }
   }
 
-  return sort
+  if (item.folder === folder) {
+    return {
+      errorCodes: [MoveToFolderErrorCode.AlreadyExists],
+    }
+  }
+
+  const savedAt = new Date()
+
+  await updateLibraryItem(
+    item.id,
+    {
+      folder,
+      savedAt,
+      seenAt: new Date(),
+    },
+    uid,
+    pubsub
+  )
+
+  // if the content is not fetched yet, create a page save request
+  if (item.state === LibraryItemState.ContentNotFetched) {
+    try {
+      await createPageSaveRequest({
+        user: item.user,
+        url: item.originalUrl,
+        articleSavingRequestId: id,
+        priority: 'high',
+        publishedAt: item.publishedAt || undefined,
+        savedAt,
+        folder,
+        pubsub,
+      })
+    } catch (error) {
+      log.error('moveToFolderResolver error', error)
+
+      return {
+        errorCodes: [MoveToFolderErrorCode.BadRequest],
+      }
+    }
+  }
+
+  return {
+    success: true,
+  }
+})
+
+export const fetchContentResolver = authorized<
+  FetchContentSuccess,
+  FetchContentError,
+  MutationFetchContentArgs
+>(async (_, { id }, { uid, log, pubsub }) => {
+  analytics.capture({
+    distinctId: uid,
+    event: 'fetch_content',
+    properties: {
+      id,
+    },
+  })
+
+  const item = await authTrx(
+    (tx) =>
+      tx.getRepository(LibraryItem).findOne({
+        where: {
+          id,
+        },
+        relations: ['user'],
+      }),
+    {
+      replicationMode: 'replica',
+    }
+  )
+  if (!item) {
+    return {
+      errorCodes: [FetchContentErrorCode.Unauthorized],
+    }
+  }
+
+  // if the content is not fetched yet, create a page save request
+  if (item.state === LibraryItemState.ContentNotFetched) {
+    try {
+      await createPageSaveRequest({
+        user: item.user,
+        url: item.originalUrl,
+        articleSavingRequestId: id,
+        priority: 'high',
+        pubsub,
+      })
+    } catch (error) {
+      log.error('fetchContentResolver error', error)
+
+      return {
+        errorCodes: [FetchContentErrorCode.BadRequest],
+      }
+    }
+  }
+
+  return {
+    success: true,
+  }
+})
+
+export const emptyTrashResolver = authorized<
+  EmptyTrashSuccess,
+  EmptyTrashError
+>(async (_, __, { uid }) => {
+  analytics.capture({
+    distinctId: uid,
+    event: 'empty_trash',
+  })
+
+  await batchDelete({
+    user: {
+      id: uid,
+    },
+    state: LibraryItemState.Deleted,
+  })
+
+  await deleteCachedTotalCount(uid)
+
+  return {
+    success: true,
+  }
+})
+
+const getUpdateReason = (libraryItem: LibraryItem, since: Date) => {
+  if (libraryItem.deletedAt) {
+    return UpdateReason.Deleted
+  }
+  if (libraryItem.createdAt >= since) {
+    return UpdateReason.Created
+  }
+  return UpdateReason.Updated
 }

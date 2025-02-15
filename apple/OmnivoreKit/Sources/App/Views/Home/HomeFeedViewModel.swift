@@ -5,108 +5,157 @@ import SwiftUI
 import Utils
 import Views
 
+enum LoadingBarStyle {
+  case none
+  case redacted
+  case simple
+}
+
 @MainActor final class HomeFeedViewModel: NSObject, ObservableObject {
-  var currentDetailViewModel: LinkItemDetailViewModel?
+  let filterKey: String
+  @ObservedObject var fetcher: LibraryItemFetcher
+  let folderConfigs: [String: LibraryListConfig]
 
-  private var fetchedResultsController: NSFetchedResultsController<LinkedItem>?
-
-  @Published var items = [LinkedItem]()
   @Published var isLoading = false
-  @Published var showPushNotificationPrimer = false
-  @Published var itemUnderLabelEdit: LinkedItem?
-  @Published var itemUnderTitleEdit: LinkedItem?
-  @Published var itemForHighlightsView: LinkedItem?
-  @Published var searchTerm = ""
-  @Published var scopeSelection = 0
-  @Published var selectedLabels = [LinkedItemLabel]()
-  @Published var negatedLabels = [LinkedItemLabel]()
-  @Published var snoozePresented = false
-  @Published var itemToSnoozeID: String?
+  @Published var itemUnderLabelEdit: Models.LibraryItem?
+  @Published var itemUnderTitleEdit: Models.LibraryItem?
+  @Published var itemForHighlightsView: Models.LibraryItem?
   @Published var linkRequest: LinkRequest?
-  @Published var showLoadingBar = false
-  @Published var appliedSort = LinkedItemSort.newest.rawValue
+  @Published var presentWebContainer = false
+  @Published var showLoadingBar = LoadingBarStyle.redacted
 
-  @Published var selectedLinkItem: NSManagedObjectID? // used by mac app only
-  @Published var selectedItem: LinkedItem?
+  @Published var selectedItem: Models.LibraryItem?
   @Published var linkIsActive = false
 
   @Published var showLabelsSheet = false
-  @Published var showCommunityModal = false
 
-  @Published var featureFilter = FeaturedItemFilter.continueReading
-  @Published var featureItems = [LinkedItem]()
+  @Published var showAddFeedView = false
+  @Published var showHideFollowingAlert = false
 
-  var cursor: String?
+  @Published var filters = [InternalFilter]()
 
-  // These are used to make sure we handle search result
-  // responses in the right order
-  var searchIdx = 0
-  var receivedIdx = 0
+  @Published var searchTerm = ""
+  @Published var selectedLabels = [LinkedItemLabel]()
+  @Published var negatedLabels = [LinkedItemLabel]()
+  @Published var appliedSort = LinkedItemSort.newest.rawValue
 
-  var syncCursor: String?
+  @Published var digestIsUnread = false
+
+  @State var lastMoreFetched: Date?
+  @State var lastFiltersFetched: Date?
+
+  @State var isModifyingNewsletterDestination = false
 
   @AppStorage(UserDefaultKey.hideFeatureSection.rawValue) var hideFeatureSection = false
-  @AppStorage(UserDefaultKey.lastSelectedLinkedItemFilter.rawValue) var appliedFilter = LinkedItemFilter.inbox.rawValue
+  @AppStorage(UserDefaultKey.stopUsingFollowingPrimer.rawValue) var stopUsingFollowingPrimer = false
+  @AppStorage("LibraryTabView::hideFollowingTab") var hideFollowingTab = false
+  @AppStorage("LibraryTabView::hideDigestIcon") var hideDigestIcon = false
+  @AppStorage(UserDefaultKey.lastVisitedDigestId.rawValue) var lastVisitedDigestId = ""
 
-  func setItems(_ items: [LinkedItem]) {
-    self.items = items
-    updateFeatureFilter(featureFilter)
-  }
+  @AppStorage(UserDefaultKey.lastSelectedFeaturedItemFilter.rawValue) var featureFilter = 
+  FeaturedItemFilter.continueReading.rawValue
 
-  func updateFeatureFilter(_ filter: FeaturedItemFilter) {
-    // now try to update the continue reading items:
-    featureItems = (items.filter { item in
-      filter.predicate.evaluate(with: item)
-    } as NSArray)
-      .sortedArray(using: [filter.sortDescriptor])
-      .compactMap { $0 as? LinkedItem }
-    featureFilter = filter
-  }
-
-  func handleReaderItemNotification(objectID: NSManagedObjectID, dataService: DataService) {
-    // Pop the current selected item if needed
-    if selectedItem != nil, selectedItem?.objectID != objectID {
-      // Temporarily disable animation to avoid excessive animations
-      #if os(iOS)
-        UIView.setAnimationsEnabled(false)
-      #endif
-
-      linkIsActive = false
-      selectedItem = nil
-
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) {
-        self.selectedLinkItem = objectID
-        self.selectedItem = dataService.viewContext.object(with: objectID) as? LinkedItem
-        self.linkIsActive = true
+  @Published var appliedFilter: InternalFilter? {
+    didSet {
+      if let filterName = appliedFilter?.name.lowercased() {
+        UserDefaults.standard.setValue(filterName, forKey: filterKey)
       }
-
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) {
-        #if os(iOS)
-          UIView.setAnimationsEnabled(true)
-        #endif
-      }
-    } else {
-      selectedLinkItem = objectID
-      selectedItem = dataService.viewContext.object(with: objectID) as? LinkedItem
-      linkIsActive = true
     }
   }
 
-  func itemAppeared(item: LinkedItem, dataService: DataService) async {
-    if isLoading { return }
-    let itemIndex = items.firstIndex(where: { $0.id == item.id })
-    let thresholdIndex = items.index(items.endIndex, offsetBy: -5)
+  init(filterKey: String, fetcher: LibraryItemFetcher, folderConfigs: [String: LibraryListConfig]) {
+    self.filterKey = filterKey
 
-    // Check if user has scrolled to the last five items in the list
-    // Make sure we aren't currently loading though, as this would get triggered when the first set
-    // of items are presented to the user.
-    if let itemIndex = itemIndex, itemIndex > thresholdIndex {
-      await loadMoreItems(dataService: dataService, isRefresh: false)
+    self.fetcher = fetcher
+    self.folderConfigs = folderConfigs
+
+    super.init()
+  }
+
+  func presentItem(item: Models.LibraryItem) {
+    withAnimation {
+      self.selectedItem = item
+      self.linkIsActive = true
     }
   }
 
-  func pushFeedItem(item: LinkedItem) {
-    items.insert(item, at: 0)
+  func pushLinkedRequest(request: LinkRequest) {
+    self.linkRequest = request
+    self.presentWebContainer = true
+  }
+
+  private var filterState: FetcherFilterState? {
+    if let appliedFilter = appliedFilter {
+      return FetcherFilterState(
+        folder: appliedFilter.folder,
+        searchTerm: searchTerm,
+        selectedLabels: selectedLabels,
+        negatedLabels: negatedLabels,
+        appliedSort: appliedSort,
+        appliedFilter: appliedFilter
+      )
+    }
+    return nil
+  }
+
+  var currentFolder: String? {
+    appliedFilter?.folder
+  }
+
+  var currentListConfig: LibraryListConfig? {
+    if let currentFolder = currentFolder {
+      return folderConfigs[currentFolder]
+    }
+    return nil
+  }
+
+  func loadFilters(dataService: DataService) async {
+    let start = Date()
+    var hasLocalResults = false
+    let fetchRequest: NSFetchRequest<Models.Filter> = Filter.fetchRequest()
+
+    if let lastFiltersFetched, lastFiltersFetched.timeIntervalSinceNow > -100 {
+      print("skipping fetching filters as last fetch was too recent: ", lastFiltersFetched)
+      return
+    }
+
+    // Load from disk
+    if let results = try? dataService.viewContext.fetch(fetchRequest) {
+      hasLocalResults = true
+      updateFilters(newFilters: InternalFilter.make(from: results))
+    }
+
+    let hasResults = hasLocalResults
+    if let downloadedFilters = try? await dataService.filters() {
+      updateFilters(newFilters: downloadedFilters)
+    } else if !hasResults {
+      updateFilters(newFilters: InternalFilter.DefaultInboxFilters)
+    }
+
+    lastFiltersFetched = start
+  }
+
+  func loadMore(dataService: DataService, loadCursor: String? = nil) async {
+    if let filterState = filterState {
+      if isLoading { return }
+
+      let start = Date.now
+      if let lastMoreFetched, lastMoreFetched.timeIntervalSinceNow > -4 {
+        print("skipping fetching more as last fetch was too recent: ", lastMoreFetched)
+        return
+      }
+
+      isLoading = true
+      await fetcher.loadMoreItems(dataService: dataService, filterState: filterState, loadCursor: loadCursor)
+      isLoading = false
+
+      lastMoreFetched = start
+    }
+  }
+
+  func pushFeedItem(item _: Models.LibraryItem) {
+    /// TODO: jackson
+    //   fetcher.items.insert(item, at: 0)
   }
 
   func loadCurrentViewer(dataService: DataService) async {
@@ -125,240 +174,241 @@ import Views
     }
   }
 
-  func syncItems(dataService: DataService) async {
-    let syncStart = Date.now
-    let lastSyncDate = dataService.lastItemSyncTime
+  var defaultFilters: [InternalFilter] {
+    [InternalFilter.InboxUnreadFilter,
+     InternalFilter.InboxDeletedFilter,
+     InternalFilter.InboxDownloadedFilter]
+      + InternalFilter.DefaultFollowingFilters
+  }
 
-    try? await dataService.syncOfflineItemsWithServerIfNeeded()
+  func updateFilters(newFilters: [InternalFilter]) {
+    let availableFolders = folderConfigs.keys
+    let appliedFilterName = UserDefaults.standard.string(forKey: filterKey)
 
-    let syncResult = try? await dataService.syncLinkedItems(since: lastSyncDate,
-                                                            cursor: nil)
+    filters = (defaultFilters + newFilters)
+      .filter { availableFolders.contains($0.folder) }
+      .sorted(by: { $0.position < $1.position })
 
-    syncCursor = syncResult?.cursor
-    if let syncResult = syncResult, syncResult.hasMore {
-      dataService.syncLinkedItemsInBackground(since: lastSyncDate) {
-        // Set isLoading to false here
-        self.isLoading = false
-      }
-    } else {
-      dataService.lastItemSyncTime = syncStart
-    }
-
-    // If possible start prefetching new pages in the background
-    if
-      let itemIDs = syncResult?.updatedItemIDs,
-      let username = dataService.currentViewer?.username,
-      !itemIDs.isEmpty
-    {
-      Task.detached(priority: .background) {
-        await dataService.prefetchPages(itemIDs: itemIDs, username: username)
-      }
+    if let newFilter = filters.first(where: { $0.name.lowercased() == appliedFilterName }), newFilter.id != appliedFilter?.id {
+      appliedFilter = newFilter
     }
   }
 
-  func loadSearchQuery(dataService: DataService, isRefresh: Bool) async {
-    let thisSearchIdx = searchIdx
-    searchIdx += 1
-
-    if thisSearchIdx > 0, thisSearchIdx <= receivedIdx {
+  func setDefaultFilter() {
+    let availableFolders = folderConfigs.keys
+    let appliedFilterName = UserDefaults.standard.string(forKey: filterKey)
+    if let newFilter = filters.first(where: { $0.name.lowercased() == appliedFilterName }), newFilter.id != appliedFilter?.id {
+      appliedFilter = newFilter
       return
     }
 
-    let queryResult = try? await dataService.loadLinkedItems(
-      limit: 10,
-      searchQuery: searchQuery,
-      cursor: isRefresh ? nil : cursor
-    )
-
-    if let queryResult = queryResult {
-      let newItems: [LinkedItem] = {
-        var itemObjects = [LinkedItem]()
-        dataService.viewContext.performAndWait {
-          itemObjects = queryResult.itemIDs.compactMap { dataService.viewContext.object(with: $0) as? LinkedItem }
-        }
-        return itemObjects
-      }()
-
-      if searchTerm.replacingOccurrences(of: " ", with: "").isEmpty {
-        updateFetchController(dataService: dataService)
-      } else {
-        // Don't use FRC for searching. Use server results directly.
-        if fetchedResultsController != nil {
-          fetchedResultsController = nil
-          setItems([])
-        }
-        setItems(isRefresh ? newItems : items + newItems)
-      }
-
-      isLoading = false
-      receivedIdx = thisSearchIdx
-      cursor = queryResult.cursor
-      if let username = dataService.currentViewer?.username {
-        await dataService.prefetchPages(itemIDs: newItems.map(\.unwrappedID), username: username)
-      }
-    } else {
-      updateFetchController(dataService: dataService)
+    if let defaultFilter = filters.first(where: { availableFolders.contains($0.folder) }) {
+      appliedFilter = defaultFilter
     }
   }
 
-  func loadItems(dataService: DataService, isRefresh: Bool) async {
-    isLoading = true
-    showLoadingBar = true
-
-    await withTaskGroup(of: Void.self) { group in
-      group.addTask { await self.loadCurrentViewer(dataService: dataService) }
-      group.addTask { await self.loadLabels(dataService: dataService) }
-      group.addTask { await self.syncItems(dataService: dataService) }
-      group.addTask { await self.updateFetchController(dataService: dataService) }
-      await group.waitForAll()
+  func loadNewItems(dataService: DataService) async {
+    if let filterState = filterState {
+      await fetcher.loadNewItems(
+        dataService: dataService,
+        filterState: filterState
+      )
+      objectWillChange.send()
     }
+  }
 
-    let shouldSearch = items.count < 1 || isRefresh
-    if shouldSearch {
-      await loadSearchQuery(dataService: dataService, isRefresh: isRefresh)
-    } else {
-      updateFetchController(dataService: dataService)
+  func loadItems(dataService: DataService, isRefresh: Bool, forceRemote: Bool = false, loadingBarStyle: LoadingBarStyle? = nil) async {
+    isLoading = true
+    showLoadingBar = .simple // isRefresh ? loadingBarStyle ?? .redacted : .none
+
+    if let filterState = filterState {
+      await fetcher.loadItems(
+        dataService: dataService,
+        filterState: filterState,
+        isRefresh: isRefresh,
+        forceRemote: forceRemote
+      )
     }
 
     isLoading = false
-    showLoadingBar = false
+    showLoadingBar = .none
   }
 
-  func loadMoreItems(dataService: DataService, isRefresh: Bool) async {
-    isLoading = true
-    showLoadingBar = true
+  func loadFeatureItems(context: NSManagedObjectContext, predicate: NSPredicate, sort: NSSortDescriptor) async -> [Models.LibraryItem] {
+    let fetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
+    fetchRequest.fetchLimit = 25
+    fetchRequest.predicate = predicate
+    fetchRequest.sortDescriptors = [sort]
 
-    await loadSearchQuery(dataService: dataService, isRefresh: isRefresh)
-
-    isLoading = false
-    showLoadingBar = false
+    do {
+      let fetched = try context.fetch(fetchRequest)
+      return fetched
+    } catch {
+      print("ERROR FETCHING: ", error)
+    }
+    return []
+//    return (try? context.fetch(fetchRequest)) ?? []
   }
 
-  private var fetchRequest: NSFetchRequest<Models.LinkedItem> {
-    let fetchRequest: NSFetchRequest<Models.LinkedItem> = LinkedItem.fetchRequest()
-
-    var subPredicates = [NSPredicate]()
-
-    subPredicates.append((LinkedItemFilter(rawValue: appliedFilter) ?? .inbox).predicate)
-
-    if !selectedLabels.isEmpty {
-      var labelSubPredicates = [NSPredicate]()
-
-      for label in selectedLabels {
-        labelSubPredicates.append(
-          NSPredicate(format: "SUBQUERY(labels, $label, $label.id == \"\(label.unwrappedID)\").@count > 0")
-        )
-      }
-
-      subPredicates.append(NSCompoundPredicate(orPredicateWithSubpredicates: labelSubPredicates))
-    }
-
-    if !negatedLabels.isEmpty {
-      var labelSubPredicates = [NSPredicate]()
-
-      for label in negatedLabels {
-        labelSubPredicates.append(
-          NSPredicate(format: "SUBQUERY(labels, $label, $label.id == \"\(label.unwrappedID)\").@count == 0")
-        )
-      }
-
-      subPredicates.append(NSCompoundPredicate(orPredicateWithSubpredicates: labelSubPredicates))
-    }
-
-    fetchRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: subPredicates)
-    fetchRequest.sortDescriptors = (LinkedItemSort(rawValue: appliedSort) ?? .newest).sortDescriptors
-
-    return fetchRequest
-  }
-
-  private func updateFetchController(dataService: DataService) {
-    fetchedResultsController = NSFetchedResultsController(
-      fetchRequest: fetchRequest,
-      managedObjectContext: dataService.viewContext,
-      sectionNameKeyPath: nil,
-      cacheName: nil
-    )
-
-    guard let fetchedResultsController = fetchedResultsController else {
-      return
-    }
-
-    fetchedResultsController.delegate = self
-    try? fetchedResultsController.performFetch()
-    setItems(fetchedResultsController.fetchedObjects ?? [])
+  func snackbar(_ message: String, undoAction: SnackbarUndoAction? = nil) {
+    Snackbar.show(message: message, undoAction: undoAction, dismissAfter: 2000)
   }
 
   func setLinkArchived(dataService: DataService, objectID: NSManagedObjectID, archived: Bool) {
-    dataService.archiveLink(objectID: objectID, archived: archived)
-    Snackbar.show(message: archived ? "Link archived" : "Link moved to Inbox")
+    archiveLibraryItemAction(dataService: dataService, objectID: objectID, archived: archived)
   }
 
-  func removeLink(dataService: DataService, objectID: NSManagedObjectID) {
-    Snackbar.show(message: "Link removed")
-    dataService.removeLink(objectID: objectID)
+  func removeLibraryItem(dataService: DataService, objectID: NSManagedObjectID) {
+    removeLibraryItemAction(dataService: dataService, objectID: objectID)
   }
 
-  func snoozeUntil(dataService: DataService, linkId: String, until: Date, successMessage: String?) async {
-    isLoading = true
-
-    if let itemIndex = items.firstIndex(where: { $0.id == linkId }) {
-      items.remove(at: itemIndex)
+  func recoverItem(dataService: DataService, itemID: String) {
+    Task {
+      if await dataService.recoverItem(itemID: itemID) {
+        snackbar("Item recovered")
+      } else {
+        snackbar("Error. Check trash to recover.")
+      }
     }
+  }
 
+  func getOrCreateLabel(dataService: DataService, named: String, color: String) -> LinkedItemLabel? {
+    if let label = LinkedItemLabel.named(named, inContext: dataService.viewContext) {
+      return label
+    }
+    if let labelID = try? dataService.createLabel(name: named, color: color, description: "") {
+      return dataService.viewContext.object(with: labelID) as? LinkedItemLabel
+      // return LinkedItemLabel.lookup(byID: labelID, inContext: dataService.viewContext)
+    }
+    return nil
+  }
+
+  func addLabel(dataService: DataService, item: Models.LibraryItem, label: String, color: String) {
+    if let label = getOrCreateLabel(dataService: dataService, named: "Pinned", color: color) {
+      let existingLabels = item.labels?.allObjects.compactMap { $0 as? LinkedItemLabel } ?? []
+      dataService.setItemLabels(itemID: item.unwrappedID, labels: InternalLinkedItemLabel.make(Set(existingLabels + [label]) as NSSet))
+
+      item.update(inContext: dataService.viewContext)
+      fetcher.refreshFeatureItems(dataService: dataService)
+    }
+  }
+
+  func removeLabel(dataService: DataService, item: Models.LibraryItem, named: String) {
+    let labels = item.labels?
+      .filter { ($0 as? LinkedItemLabel)?.name != named }
+      .compactMap { $0 as? LinkedItemLabel } ?? []
+    dataService.setItemLabels(itemID: item.unwrappedID, labels: InternalLinkedItemLabel.make(Set(labels) as NSSet))
+    item.update(inContext: dataService.viewContext)
+  }
+
+  func pinItem(dataService: DataService, item: Models.LibraryItem) {
+    addLabel(dataService: dataService, item: item, label: "Pinned", color: "#0A84FF")
+    fetcher.refreshFeatureItems(dataService: dataService)
+  }
+
+  func unpinItem(dataService: DataService, item: Models.LibraryItem) {
+    removeLabel(dataService: dataService, item: item, named: "Pinned")
+    fetcher.refreshFeatureItems(dataService: dataService)
+  }
+
+  func markRead(dataService: DataService, item: Models.LibraryItem) {
+    dataService.updateLinkReadingProgress(itemID: item.unwrappedID, readingProgress: 100, anchorIndex: 0, force: true)
+  }
+
+  func markUnread(dataService: DataService, item: Models.LibraryItem) {
+    dataService.updateLinkReadingProgress(itemID: item.unwrappedID, readingProgress: 0, anchorIndex: 0, force: true)
+  }
+
+  func moveToFolder(dataService: DataService, item: Models.LibraryItem, folder: String) {
+    Task {
+      do {
+        try await dataService.moveItem(itemID: item.unwrappedID, folder: folder)
+        snackbar("Moved to library")
+      } catch {
+        snackbar("Error moving item to \(folder)")
+      }
+    }
+  }
+
+  func bulkAction(dataService: DataService, action: BulkAction, items: [String]) {
+    if items.count < 1 {
+      snackbar("No items selected")
+      return
+    }
+    Task {
+      do {
+        try await dataService.bulkAction(action: action, items: items)
+        snackbar("Operation completed")
+      } catch {
+        print("ERROR: ", error)
+        snackbar("Error performing operation")
+      }
+    }
+  }
+
+  func findFilter(_: DataService, named: String) -> InternalFilter? {
+    filters.first(where: { $0.name == named })
+  }
+
+  func modifyingNewsletterDestinationToFollowing(dataService: DataService) async {
+    isModifyingNewsletterDestination = true
     do {
-      try await dataService.createReminder(
-        reminderItemId: .link(id: linkId),
-        remindAt: until
-      )
+      var errorCount = 0
+      let objectIDs = try await dataService.newsletterEmails()
+      let newsletters = await dataService.viewContext.perform {
+        let newsletters = objectIDs.compactMap { dataService.viewContext.object(with: $0) as? NewsletterEmail }
+        return newsletters
+      }
 
-      if let message = successMessage {
-        Snackbar.show(message: message)
+      for newsletter in newsletters {
+        if let emailId = newsletter.emailId, newsletter.folder != "following" {
+          do {
+            try await dataService.updateNewsletterEmail(emailID: emailId, folder: "following")
+          } catch {
+            print("error updating newsletter: ", error)
+            errorCount += 1
+          }
+        }
+      }
+      if errorCount > 0 {
+        snackbar("There was an error modifying \(errorCount) of your emails")
+      } else {
+        snackbar("Email destination modified")
       }
     } catch {
-      NSNotification.operationFailed(message: "Failed to snooze")
+      snackbar("Error modifying emails")
     }
-
-    isLoading = false
   }
 
-  private var queryContainsFilter: Bool {
-    if searchTerm.contains("in:inbox") || searchTerm.contains("in:all") || searchTerm.contains("in:archive") {
-      return true
+  func updateFeatureFilter(context: NSManagedObjectContext, filter: FeaturedItemFilter?) {
+    if let filter = filter {
+      featureFilter = filter.rawValue
+      fetcher.updateFeatureFilter(context: context, filter: filter)
     }
-
-    return false
   }
 
-  private var searchQuery: String {
-    let sort = LinkedItemSort(rawValue: appliedSort) ?? .newest
-    var query = sort.queryString
+  @Published var isEmptyingTrash = false
 
-    if !queryContainsFilter, let filter = LinkedItemFilter(rawValue: appliedFilter) {
-      query = "\(filter.queryString) \(sort.queryString)"
+  func emptyTrash(dataService: DataService) {
+    self.isEmptyingTrash = true
+    Task {
+      if !(await dataService.emptyTrash()) {
+        snackbar("Error emptying trash")
+      } else {
+        snackbar("Trash emptied")
+      }
+      isEmptyingTrash = false
     }
-
-    if !searchTerm.isEmpty {
-      query.append(" \(searchTerm)")
-    }
-
-    if !selectedLabels.isEmpty {
-      query.append(" label:")
-      query.append(selectedLabels.map { $0.name ?? "" }.joined(separator: ","))
-    }
-
-    if !negatedLabels.isEmpty {
-      query.append(" !label:")
-      query.append(negatedLabels.map { $0.name ?? "" }.joined(separator: ","))
-    }
-
-    print("QUERY: `\(query)`")
-
-    return query
   }
-}
 
-extension HomeFeedViewModel: NSFetchedResultsControllerDelegate {
-  func controllerDidChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
-    setItems(controller.fetchedObjects as? [LinkedItem] ?? [])
+  func checkForDigestUpdate(dataService: DataService) async {
+    do {
+      if dataService.featureFlags.digestEnabled, 
+          let result = try? await dataService.getLatestDigest(timeoutInterval: 2) {
+        if result.id != lastVisitedDigestId {
+          digestIsUnread = true
+        }
+      }
+    }
   }
 }

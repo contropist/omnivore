@@ -5,11 +5,19 @@ import {
   registerDatabase,
   AdminUser,
   User,
-  UserArticle,
   UserProfile,
   ReceivedEmail,
   Group,
   ContentDisplayReport,
+  Subscription,
+  Integration,
+  LibraryItem,
+  Recommendation,
+  GroupMembership,
+  Features,
+  EmailAddress,
+  Rule,
+  Export,
 } from './db'
 import { compare, hashSync } from 'bcryptjs'
 const readYamlFile = require('read-yaml-file')
@@ -28,25 +36,32 @@ const ADMIN_USER_EMAIL =
     rootPath: '/admin',
     resources: [
       {
+        resource: ContentDisplayReport,
+      },
+      {
         resource: User,
         options: {
           parent: { name: 'Users' },
         },
       },
       { resource: UserProfile, options: { parent: { name: 'Users' } } },
-      { resource: UserArticle, options: { parent: { name: 'Users' } } },
       { resource: ReceivedEmail, options: { parent: { name: 'Users' } } },
       { resource: Group, options: { parent: { name: 'Users' } } },
-      {
-        resource: ContentDisplayReport,
-      },
+      { resource: Subscription, options: { parent: { name: 'Users' } } },
+      { resource: Integration, options: { parent: { name: 'Users' } } },
+      { resource: LibraryItem, options: { parent: { name: 'Users' } } },
+      { resource: Recommendation, options: { parent: { name: 'Users' } } },
+      { resource: GroupMembership, options: { parent: { name: 'Users' } } },
+      { resource: Features, options: { parent: { name: 'Users' } } },
+      { resource: EmailAddress, options: { parent: { name: 'Users' } } },
+      { resource: Rule, options: { parent: { name: 'Users' } } },
+      { resource: Export, options: { parent: { name: 'Users' } } },
     ],
   })
 
   const router = AdminJsExpress.buildAuthenticatedRouter(adminBro, {
     authenticate: async (email, password) => {
       const user = await AdminUser.findOne({ email })
-      console.log('looked up user: ', user)
       if (user) {
         const matched = await compare(password, user.password)
         console.log(' -- failed match')

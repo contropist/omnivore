@@ -1,17 +1,23 @@
-import { Trash } from 'phosphor-react'
-import { Toaster } from 'react-hot-toast'
+import { Pencil, Trash } from '@phosphor-icons/react'
 import { Button } from '../../elements/Button'
 import { Dropdown, DropdownOption } from '../../elements/DropdownElements'
 import { MoreOptionsIcon } from '../../elements/images/MoreOptionsIcon'
 import { InfoLink } from '../../elements/InfoLink'
 import { Box, HStack, SpanBox, VStack } from '../../elements/LayoutPrimitives'
 import { StyledText } from '../../elements/StyledText'
-import { theme } from '../../tokens/stitches.config'
+import { styled, theme } from '../../tokens/stitches.config'
 import { SettingsLayout } from '../SettingsLayout'
+
+// Styles
+export const Header = styled(Box, {
+  color: '$utilityTextDefault',
+  fontSize: 'x-large',
+  margin: '20px',
+})
 
 type SettingsTableProps = {
   pageId: string
-  pageInfoLink: string
+  pageInfoLink?: string | undefined
   headerTitle: string
 
   createTitle?: string
@@ -26,7 +32,7 @@ type CreateButtonProps = {
 }
 
 type SettingsTableRowProps = {
-  title: string
+  title: string | JSX.Element
   isLast: boolean
 
   onClick?: () => void
@@ -39,12 +45,17 @@ type SettingsTableRowProps = {
   onDelete?: () => void
 
   dropdownItems?: JSX.Element
+
+  editTitle?: string
+  onEdit?: () => void
 }
 
 type MoreOptionsProps = {
-  title?: string
+  deleteTitle?: string
   onDelete?: () => void
   dropdownItems?: JSX.Element
+  editTitle?: string
+  onEdit?: () => void
 }
 
 const MoreOptions = (props: MoreOptionsProps) => (
@@ -66,7 +77,33 @@ const MoreOptions = (props: MoreOptionsProps) => (
       </Box>
     }
   >
-    {props.onDelete && props.title && (
+    {props.onEdit && props.editTitle && (
+      <DropdownOption
+        onSelect={() => {
+          props.onEdit && props.onEdit()
+        }}
+      >
+        <HStack alignment={'center'} distribution={'start'}>
+          <Pencil size={24} color={theme.colors.omnivoreLightGray.toString()} />
+          <SpanBox
+            css={{
+              color: theme.colors.omnivoreLightGray.toString(),
+              marginLeft: '8px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              '&:hover': {
+                border: 'none',
+                backgroundColor: 'transparent',
+              },
+            }}
+          >
+            {props.editTitle}
+          </SpanBox>
+        </HStack>
+      </DropdownOption>
+    )}
+
+    {props.onDelete && props.deleteTitle && (
       <DropdownOption
         onSelect={() => {
           props.onDelete && props.onDelete()
@@ -86,7 +123,7 @@ const MoreOptions = (props: MoreOptionsProps) => (
               },
             }}
           >
-            {props.title}
+            {props.deleteTitle}
           </SpanBox>
         </HStack>
       </DropdownOption>
@@ -166,7 +203,7 @@ export const SettingsTableRow = (props: SettingsTableRowProps): JSX.Element => {
           }}
         >
           <VStack>
-            <StyledText
+            <SpanBox
               css={{
                 m: '0px',
                 fontSize: '18px',
@@ -177,7 +214,7 @@ export const SettingsTableRow = (props: SettingsTableRowProps): JSX.Element => {
               }}
             >
               {props.title}
-            </StyledText>
+            </SpanBox>
             {props.sublineElement}
           </VStack>
           <SpanBox css={{ marginLeft: 'auto' }}>{props.titleElement}</SpanBox>
@@ -192,9 +229,11 @@ export const SettingsTableRow = (props: SettingsTableRowProps): JSX.Element => {
             }}
           >
             <MoreOptions
-              title={props.deleteTitle}
+              deleteTitle={props.deleteTitle}
               onDelete={props.onDelete}
               dropdownItems={props.dropdownItems}
+              editTitle={props.editTitle}
+              onEdit={props.onEdit}
             />
           </Box>
         </HStack>
@@ -211,9 +250,11 @@ export const SettingsTableRow = (props: SettingsTableRowProps): JSX.Element => {
           }}
         >
           <MoreOptions
-            title={props.deleteTitle}
+            deleteTitle={props.deleteTitle}
             onDelete={props.onDelete}
             dropdownItems={props.dropdownItems}
+            editTitle={props.editTitle}
+            onEdit={props.onEdit}
           />
         </Box>
       </HStack>
@@ -240,17 +281,14 @@ const CreateButton = (props: CreateButtonProps): JSX.Element => {
 export const SettingsTable = (props: SettingsTableProps): JSX.Element => {
   return (
     <SettingsLayout>
-      <Toaster
-        containerStyle={{
-          top: '5rem',
-        }}
-      />
       <HStack css={{ width: '100%' }} alignment="center">
         <VStack
+          alignment="start"
           distribution="center"
           css={{
             mx: '10px',
             width: '100%',
+            height: '100%',
             maxWidth: '865px',
             color: '$grayText',
             paddingBottom: '5rem',
@@ -307,7 +345,9 @@ export const SettingsTable = (props: SettingsTableProps): JSX.Element => {
                 >
                   {props.headerTitle}
                 </StyledText>
-                <InfoLink href={props.pageInfoLink}></InfoLink>
+                {props.pageInfoLink && (
+                  <InfoLink href={props.pageInfoLink}></InfoLink>
+                )}
               </HStack>
             </Box>
           </Box>

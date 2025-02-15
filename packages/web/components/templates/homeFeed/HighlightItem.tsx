@@ -1,10 +1,8 @@
-import { Item } from '@radix-ui/react-dropdown-menu'
 import Link from 'next/link'
-import { useRouter } from 'next/router'
-import { DotsThreeVertical } from 'phosphor-react'
+import { DotsThreeVertical } from '@phosphor-icons/react'
 import { useCallback } from 'react'
 import { Highlight } from '../../../lib/networking/fragments/highlightFragment'
-import { ReadableItem } from '../../../lib/networking/queries/useGetLibraryItemsQuery'
+import { ReadableItem } from '../../../lib/networking/library_items/useLibraryItems'
 import { UserBasicData } from '../../../lib/networking/queries/useGetViewerQuery'
 import { showErrorToast, showSuccessToast } from '../../../lib/toastHelpers'
 import {
@@ -12,9 +10,9 @@ import {
   DropdownOption,
   DropdownSeparator,
 } from '../../elements/DropdownElements'
-import { Box, SpanBox } from '../../elements/LayoutPrimitives'
-
+import { Box, VStack } from '../../elements/LayoutPrimitives'
 import { styled, theme } from '../../tokens/stitches.config'
+import { sortHighlights } from '../../../lib/highlights/sortHighlights'
 
 type HighlightsMenuProps = {
   viewer: UserBasicData
@@ -59,70 +57,78 @@ export function HighlightsMenu(props: HighlightsMenuProps): JSX.Element {
   }, [props.highlight])
 
   return (
-    <Dropdown
-      triggerElement={
-        <Box
-          css={{
-            display: 'flex',
-            height: '20px',
-            width: '20px',
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: '1000px',
-            '&:hover': {
-              bg: '#898989',
-            },
-          }}
-        >
-          <DotsThreeVertical
-            size={20}
-            color={theme.colors.thTextContrast2.toString()}
-            weight="bold"
-          />
-        </Box>
-      }
+    <VStack
+      distribution="center"
+      alignment="center"
+      css={{ height: '100%', pl: '5px', pt: '5px' }}
     >
-      <DropdownOption
-        onSelect={async () => {
-          copyHighlight()
-        }}
-        title="Copy"
-      />
-      <DropdownOption
-        onSelect={() => {
-          props.setLabelsTarget(props.highlight)
-        }}
-        title="Labels"
-      />
-      <DropdownOption
-        onSelect={() => {
-          props.setShowConfirmDeleteHighlightId(props.highlight.id)
-        }}
-        title="Delete"
-      />
-      <DropdownSeparator />
-      <Link
-        href={`/${props.viewer.profile.username}/${props.item.slug}#${props.highlight.id}`}
+      <Dropdown
+        triggerElement={
+          <Box
+            css={{
+              marginLeft: 'auto',
+              display: 'flex',
+              height: '20px',
+              width: '20px',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '1000px',
+              '&:hover': {
+                bg: '#898989',
+              },
+            }}
+          >
+            <DotsThreeVertical
+              size={20}
+              color={theme.colors.thTextContrast2.toString()}
+              weight="bold"
+            />
+          </Box>
+        }
       >
-        <StyledLinkItem
-          onClick={(event) => {
-            console.log('event.ctrlKey: ', event.ctrlKey, event.metaKey)
-            if (event.ctrlKey || event.metaKey) {
-              window.open(
-                `/${props.viewer.profile.username}/${props.item.slug}#${props.highlight.id}`,
-                '_blank'
-              )
-              return
-            }
-            props.viewInReader(props.highlight.id)
-            event.preventDefault()
-            event.stopPropagation()
+        <DropdownOption
+          onSelect={async () => {
+            copyHighlight()
           }}
+          title="Copy"
+        />
+        <DropdownOption
+          onSelect={() => {
+            props.setLabelsTarget(props.highlight)
+          }}
+          title="Labels"
+        />
+        <DropdownOption
+          onSelect={() => {
+            props.setShowConfirmDeleteHighlightId(props.highlight.id)
+          }}
+          title="Delete"
+        />
+        <DropdownSeparator />
+        <Link
+          href={`/${props.viewer.profile.username}/${props.item.slug}#${props.highlight.id}`}
+          legacyBehavior
         >
-          View In Reader
-        </StyledLinkItem>
-      </Link>
-    </Dropdown>
+          <StyledLinkItem
+            onClick={(event) => {
+              console.log('event.ctrlKey: ', event.ctrlKey, event.metaKey)
+              if (event.ctrlKey || event.metaKey) {
+                window.open(
+                  `/${props.viewer.profile.username}/${props.item.slug}#${props.highlight.id}`,
+                  '_blank'
+                )
+                return
+              }
+              props.viewInReader(props.highlight.id)
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+          >
+            View In Reader
+          </StyledLinkItem>
+        </Link>
+      </Dropdown>
+    </VStack>
   )
 }
 
@@ -138,14 +144,13 @@ export function highlightAsMarkdown(highlight: Highlight) {
 export function highlightsAsMarkdown(highlights: Highlight[]) {
   const noteMD = highlights.find((h) => h.type == 'NOTE')
 
-  const highlightMD = highlights
-    .filter((h) => h.type == 'HIGHLIGHT')
+  const highlightMD = sortHighlights(highlights ?? [])
     .map((highlight) => {
       return highlightAsMarkdown(highlight)
     })
     .join('\n\n')
 
-  if (noteMD) {
+  if (noteMD?.annotation) {
     return `${noteMD.annotation}\n\n${highlightMD}`
   }
   return highlightMD

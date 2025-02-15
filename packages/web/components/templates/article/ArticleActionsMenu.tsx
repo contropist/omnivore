@@ -1,22 +1,17 @@
 import { Separator } from '@radix-ui/react-separator'
-import {
-  ArchiveBox,
-  Notebook,
-  Info,
-  TagSimple,
-  Trash,
-  Tray,
-} from 'phosphor-react'
-import { ArticleAttributes } from '../../../lib/networking/queries/useGetArticleQuery'
+import { ArticleAttributes } from '../../../lib/networking/library_items/useLibraryItems'
 import { Button } from '../../elements/Button'
 import { Box, SpanBox } from '../../elements/LayoutPrimitives'
-import { TooltipWrapped } from '../../elements/Tooltip'
 import { styled, theme } from '../../tokens/stitches.config'
-import { useReaderSettings } from '../../../lib/hooks/useReaderSettings'
+import { ReaderSettings } from '../../../lib/hooks/useReaderSettings'
 import { useRef } from 'react'
-import { setLabelsMutation } from '../../../lib/networking/mutations/setLabelsMutation'
-import { Label } from '../../../lib/networking/fragments/labelFragment'
-import { SetLabelsModal } from './SetLabelsModal'
+import { ArchiveIcon } from '../../elements/icons/ArchiveIcon'
+import { NotebookIcon } from '../../elements/icons/NotebookIcon'
+import { TrashIcon } from '../../elements/icons/TrashIcon'
+import { LabelIcon } from '../../elements/icons/LabelIcon'
+import { EditInfoIcon } from '../../elements/icons/EditInfoIcon'
+import { UnarchiveIcon } from '../../elements/icons/UnarchiveIcon'
+import { State } from '../../../lib/networking/fragments/articleFragment'
 
 export type ArticleActionsMenuLayout = 'top' | 'side'
 
@@ -24,6 +19,7 @@ type ArticleActionsMenuProps = {
   article?: ArticleAttributes
   layout: ArticleActionsMenuLayout
   showReaderDisplaySettings?: boolean
+  readerSettings: ReaderSettings
   articleActionHandler: (action: string, arg?: unknown) => void
 }
 
@@ -44,7 +40,6 @@ const MenuSeparator = (props: MenuSeparatorProps): JSX.Element => {
 export function ArticleActionsMenu(
   props: ArticleActionsMenuProps
 ): JSX.Element {
-  const readerSettings = useReaderSettings()
   const displaySettingsButtonRef = useRef<HTMLElement | null>(null)
 
   return (
@@ -71,25 +66,22 @@ export function ArticleActionsMenu(
           {props.article ? (
             <>
               <Button
+                title="Edit labels (l)"
                 style="articleActionIcon"
-                onClick={() => readerSettings.setShowSetLabelsModal(true)}
+                onClick={() => props.readerSettings.setShowSetLabelsModal(true)}
               >
-                <TooltipWrapped
-                  tooltipContent="Edit labels (l)"
-                  tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-                >
-                  <SpanBox ref={displaySettingsButtonRef}>
-                    <TagSimple
-                      size={24}
-                      color={theme.colors.thHighContrast.toString()}
-                    />
-                  </SpanBox>
-                </TooltipWrapped>
+                <SpanBox ref={displaySettingsButtonRef}>
+                  <LabelIcon
+                    size={24}
+                    color={theme.colors.thHighContrast.toString()}
+                  />
+                </SpanBox>
               </Button>
               <MenuSeparator layout={props.layout} />
             </>
           ) : (
             <Button
+              title="Edit labels (l)"
               style="articleActionIcon"
               css={{
                 '@smDown': {
@@ -97,7 +89,7 @@ export function ArticleActionsMenu(
                 },
               }}
             >
-              <TagSimple
+              <LabelIcon
                 size={24}
                 color={theme.colors.thHighContrast.toString()}
               />
@@ -106,6 +98,7 @@ export function ArticleActionsMenu(
         </SpanBox>
 
         <Button
+          title="Edit labels (l)"
           style="articleActionIcon"
           onClick={() => props.articleActionHandler('setLabels')}
           css={{
@@ -116,10 +109,11 @@ export function ArticleActionsMenu(
             },
           }}
         >
-          <TagSimple size={24} color={theme.colors.thHighContrast.toString()} />
+          <LabelIcon size={24} color={theme.colors.thHighContrast.toString()} />
         </Button>
 
         <Button
+          title="View notebook (t)"
           style="articleActionIcon"
           onClick={() => props.articleActionHandler('showHighlights')}
           css={{
@@ -127,18 +121,14 @@ export function ArticleActionsMenu(
             alignItems: 'center',
           }}
         >
-          <TooltipWrapped
-            tooltipContent="View Notebook (t)"
-            tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-          >
-            <Notebook
-              size={24}
-              color={theme.colors.thHighContrast.toString()}
-            />
-          </TooltipWrapped>
+          <NotebookIcon
+            size={24}
+            color={theme.colors.thHighContrast.toString()}
+          />
         </Button>
 
         <Button
+          title="Edit info (i)"
           style="articleActionIcon"
           onClick={() => props.articleActionHandler('showEditModal')}
           css={{
@@ -149,17 +139,16 @@ export function ArticleActionsMenu(
             },
           }}
         >
-          <TooltipWrapped
-            tooltipContent="Edit Info (i)"
-            tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-          >
-            <Info size={24} color={theme.colors.thHighContrast.toString()} />
-          </TooltipWrapped>
+          <EditInfoIcon
+            size={24}
+            color={theme.colors.thHighContrast.toString()}
+          />
         </Button>
 
         <MenuSeparator layout={props.layout} />
 
         <Button
+          title="Remove (#)"
           style="articleActionIcon"
           onClick={() => {
             props.articleActionHandler('delete')
@@ -172,16 +161,12 @@ export function ArticleActionsMenu(
             },
           }}
         >
-          <TooltipWrapped
-            tooltipContent="Remove (#)"
-            tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-          >
-            <Trash size={24} color={theme.colors.thHighContrast.toString()} />
-          </TooltipWrapped>
+          <TrashIcon size={24} color={theme.colors.thHighContrast.toString()} />
         </Button>
 
-        {!props.article?.isArchived ? (
+        {props.article?.state !== State.ARCHIVED ? (
           <Button
+            title="Archive (e)"
             style="articleActionIcon"
             onClick={() => props.articleActionHandler('archive')}
             css={{
@@ -189,58 +174,24 @@ export function ArticleActionsMenu(
               alignItems: 'center',
             }}
           >
-            <TooltipWrapped
-              tooltipContent="Archive (e)"
-              tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-            >
-              <ArchiveBox
-                size={24}
-                color={theme.colors.thHighContrast.toString()}
-              />
-            </TooltipWrapped>
+            <ArchiveIcon
+              size={24}
+              color={theme.colors.thHighContrast.toString()}
+            />
           </Button>
         ) : (
           <Button
+            title="Unarchive (e)"
             style="articleActionIcon"
             onClick={() => props.articleActionHandler('unarchive')}
           >
-            <TooltipWrapped
-              tooltipContent="Unarchive (u)"
-              tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-            >
-              <Tray size={24} color={theme.colors.thHighContrast.toString()} />
-            </TooltipWrapped>
+            <UnarchiveIcon
+              size={24}
+              color={theme.colors.thHighContrast.toString()}
+            />
           </Button>
         )}
-
-        {/* <MenuSeparator layout={props.layout} />
-      <Button style='articleActionIcon'>
-        <DotsThree size={24} color={theme.colors.readerFont.toString()} />
-      </Button> */}
       </Box>
-
-      {props.article && readerSettings.showSetLabelsModal && (
-        <SetLabelsModal
-          provider={props.article}
-          onOpenChange={(open: boolean) => {
-            readerSettings.setShowSetLabelsModal(false)
-          }}
-          onLabelsUpdated={(labels: Label[]) => {
-            props.articleActionHandler('refreshLabels', labels)
-          }}
-          save={(labels: Label[]) => {
-            if (props.article?.id) {
-              return (
-                setLabelsMutation(
-                  props.article?.id,
-                  labels.map((l) => l.id)
-                ) ?? []
-              )
-            }
-            return Promise.resolve(labels)
-          }}
-        />
-      )}
     </>
   )
 }

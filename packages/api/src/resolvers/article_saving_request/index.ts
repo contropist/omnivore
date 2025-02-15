@@ -1,12 +1,9 @@
 /* eslint-disable prefer-const */
-import { getPageByParam } from '../../elastic/pages'
-import { User } from '../../entity/user'
-import { getRepository } from '../../entity/utils'
+import { LibraryItem, LibraryItemState } from '../../entity/library_item'
 import { env } from '../../env'
 import {
   ArticleSavingRequestError,
   ArticleSavingRequestErrorCode,
-  ArticleSavingRequestStatus,
   ArticleSavingRequestSuccess,
   CreateArticleSavingRequestError,
   CreateArticleSavingRequestErrorCode,
@@ -14,22 +11,28 @@ import {
   MutationCreateArticleSavingRequestArgs,
   QueryArticleSavingRequestArgs,
 } from '../../generated/graphql'
+import { userRepository } from '../../repository/user'
 import { createPageSaveRequest } from '../../services/create_page_save_request'
-import { analytics } from '../../utils/analytics'
 import {
-  authorized,
-  isParsingTimeout,
-  pageToArticleSavingRequest,
-} from '../../utils/helpers'
+  findLibraryItemById,
+  findLibraryItemByUrl,
+} from '../../services/library_item'
+import { Merge } from '../../util'
+import { analytics } from '../../utils/analytics'
+import { authorized } from '../../utils/gql-utils'
+import { cleanUrl, isParsingTimeout } from '../../utils/helpers'
 import { isErrorWithCode } from '../user'
 
 export const createArticleSavingRequestResolver = authorized<
-  CreateArticleSavingRequestSuccess,
+  Merge<
+    CreateArticleSavingRequestSuccess,
+    { articleSavingRequest: LibraryItem }
+  >,
   CreateArticleSavingRequestError,
   MutationCreateArticleSavingRequestArgs
->(async (_, { input: { url } }, { claims, pubsub }) => {
-  analytics.track({
-    userId: claims.uid,
+>(async (_, { input: { url } }, { uid, pubsub, log }) => {
+  analytics.capture({
+    distinctId: uid,
     event: 'link_saved',
     properties: {
       url: url,
@@ -38,17 +41,22 @@ export const createArticleSavingRequestResolver = authorized<
     },
   })
 
+  const user = await userRepository.findById(uid)
+  if (!user) {
+    return { errorCodes: [CreateArticleSavingRequestErrorCode.Unauthorized] }
+  }
+
   try {
-    const request = await createPageSaveRequest({
-      userId: claims.uid,
+    const articleSavingRequest = await createPageSaveRequest({
+      user,
       url,
       pubsub,
     })
     return {
-      articleSavingRequest: request,
+      articleSavingRequest,
     }
   } catch (err) {
-    console.log('error saving article', err)
+    log.error('createArticleSavingRequestResolver error', err)
     if (isErrorWithCode(err)) {
       return {
         errorCodes: [err.errorCode as CreateArticleSavingRequestErrorCode],
@@ -59,35 +67,52 @@ export const createArticleSavingRequestResolver = authorized<
 })
 
 export const articleSavingRequestResolver = authorized<
-  ArticleSavingRequestSuccess,
+  Merge<ArticleSavingRequestSuccess, { articleSavingRequest: LibraryItem }>,
   ArticleSavingRequestError,
   QueryArticleSavingRequestArgs
->(async (_, { id, url }, { claims }) => {
-  if (!id && !url) {
-    return { errorCodes: [ArticleSavingRequestErrorCode.BadData] }
-  }
-  const user = await getRepository(User).findOne({
-    where: { id: claims.uid },
-    relations: ['profile'],
-  })
-  if (!user) {
-    return { errorCodes: [ArticleSavingRequestErrorCode.Unauthorized] }
-  }
-  const params = {
-    _id: id || undefined,
-    url: url || undefined,
-    userId: claims.uid,
-    state: [
-      ArticleSavingRequestStatus.Succeeded,
-      ArticleSavingRequestStatus.Processing,
-    ],
-  }
-  const page = await getPageByParam(params)
-  if (!page) {
+>(async (_, { id, url }, { uid, log }) => {
+  try {
+    if (!id && !url) {
+      return { errorCodes: [ArticleSavingRequestErrorCode.BadData] }
+    }
+    const user = await userRepository.findById(uid)
+    if (!user) {
+      return { errorCodes: [ArticleSavingRequestErrorCode.Unauthorized] }
+    }
+
+    let libraryItem: LibraryItem | null = null
+    if (id) {
+      libraryItem = await findLibraryItemById(id, uid, {
+        select: [
+          'id',
+          'state',
+          'originalUrl',
+          'slug',
+          'title',
+          'author',
+          'createdAt',
+          'updatedAt',
+          'savedAt',
+        ],
+        relations: {
+          user: true,
+        },
+      })
+    } else if (url) {
+      libraryItem = await findLibraryItemByUrl(cleanUrl(url), uid)
+    }
+
+    if (!libraryItem) {
+      return { errorCodes: [ArticleSavingRequestErrorCode.NotFound] }
+    }
+    if (isParsingTimeout(libraryItem)) {
+      libraryItem.state = LibraryItemState.Succeeded
+    }
+    return {
+      articleSavingRequest: libraryItem,
+    }
+  } catch (error) {
+    log.error('articleSavingRequestResolver error', error)
     return { errorCodes: [ArticleSavingRequestErrorCode.NotFound] }
   }
-  if (isParsingTimeout(page)) {
-    page.state = ArticleSavingRequestStatus.Succeeded
-  }
-  return { articleSavingRequest: pageToArticleSavingRequest(user, page) }
 })

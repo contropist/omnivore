@@ -8,6 +8,7 @@
   struct TextToSpeechVoiceSelectionView: View {
     @EnvironmentObject var audioController: AudioController
     @EnvironmentObject var dataService: DataService
+    @Environment(\.dismiss) private var dismiss
 
     @StateObject var viewModel = TextToSpeechVoiceSelectionViewModel()
 
@@ -22,71 +23,19 @@
     var body: some View {
       Group {
         Form {
-          if FeatureFlag.enableUltraRealisticVoices, language.key == "en" {
-            if viewModel.waitingForRealisticVoices {
-              HStack {
-                Text(LocalText.texttospeechBetaSignupInProcess)
-                Spacer()
-                ProgressView()
+          if showLanguageChanger {
+            Section("Language") {
+              NavigationLink(destination: TextToSpeechLanguageView().navigationTitle("Language")) {
+                Text(audioController.currentVoiceLanguage.name)
               }
-            } else {
-              Toggle("Use Ultra Realistic Voices", isOn: $viewModel.realisticVoicesToggle)
-                .accentColor(Color.green)
-            }
-
-            if !viewModel.waitingForRealisticVoices, !audioController.ultraRealisticFeatureKey.isEmpty {
-              Text(LocalText.texttospeechBetaRealisticVoiceLimit)
-                .multilineTextAlignment(.leading)
-            } else if audioController.ultraRealisticFeatureRequested {
-              Text(LocalText.texttospeechBetaRequestReceived)
-                .multilineTextAlignment(.leading)
-            } else {
-              Text(LocalText.texttospeechBetaWaitlist)
-                .multilineTextAlignment(.leading)
             }
           }
-
-          if audioController.useUltraRealisticVoices {
-            if showLanguageChanger {
-              Section("Language") {
-                NavigationLink(destination: TextToSpeechLanguageView().navigationTitle("Language")) {
-                  Text(audioController.currentVoiceLanguage.name)
-                }
-              }
-            }
-            ultraRealisticVoices
-          } else {
-            if showLanguageChanger {
-              Section("Language") {
-                NavigationLink(destination: TextToSpeechLanguageView().navigationTitle("Language")) {
-                  Text(audioController.currentVoiceLanguage.name)
-                }
-              }
-            }
-            standardVoices
-          }
+          standardVoices
         }
       }
       .navigationTitle("Choose a Voice")
-      .onAppear {
-        // swiftlint:disable:next line_length
-        viewModel.realisticVoicesToggle = (audioController.useUltraRealisticVoices && !audioController.ultraRealisticFeatureKey.isEmpty)
-      }
-      .onChange(of: viewModel.realisticVoicesToggle) { value in
-        if value, audioController.ultraRealisticFeatureKey.isEmpty {
-          // User wants to sign up
-          viewModel.waitingForRealisticVoices = true
-          Task {
-            await viewModel.requestUltraRealisticFeatureAccess(
-              dataService: self.dataService,
-              audioController: audioController
-            )
-          }
-        } else if value, !audioController.ultraRealisticFeatureKey.isEmpty {
-          audioController.useUltraRealisticVoices = true
-        } else if !value {
-          audioController.useUltraRealisticVoices = false
-        }
+      .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ScrollToTop"))) { _ in
+        dismiss()
       }
     }
 

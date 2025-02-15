@@ -29,10 +29,10 @@ struct LabelsFlowLayout: View {
     var height = CGFloat.zero
 
     return ZStack(alignment: .topLeading) {
-      ForEach(self.labelItems, id: \.self) { label in
+      ForEach(Array(self.labelItems.enumerated()), id: \.offset) { _, label in
         self.item(for: label)
-          .padding(.horizontal, 2)
-          .padding(.vertical, 2)
+          .padding(.trailing, 5)
+          .padding(.bottom, 5)
           .alignmentGuide(.leading, computeValue: { dim in
             if abs(width - dim.width) > geom.size.width {
               width = 0
@@ -54,8 +54,7 @@ struct LabelsFlowLayout: View {
             return result
           })
       }
-    }
-    .background(viewHeightReader($totalHeight))
+    }.background(viewHeightReader($totalHeight))
   }
 
   private func item(for item: LinkedItemLabel) -> some View {

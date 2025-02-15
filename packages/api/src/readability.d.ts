@@ -139,6 +139,7 @@ declare module '@omnivore/readability' {
        * By setting this to `true`, these tables will be retained.
        */
       keepTables?: boolean
+      ignoreLinkDensity?: boolean
     }
 
     interface ParseResult {
@@ -165,6 +166,7 @@ declare module '@omnivore/readability' {
       /** Article published date */
       publishedDate?: Date | null
       language?: string | null
+      documentElement: HTMLElement
     }
   }
 

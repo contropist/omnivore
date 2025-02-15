@@ -1,11 +1,15 @@
 import Foundation
+import SwiftGraphQL
 
 public struct Subscription {
   public let createdAt: Date?
   public let description: String?
   public let subscriptionID: String
   public let name: String
-  public let newsletterEmailAddress: String
+  public let type: SubscriptionType
+  public let folder: String
+  public let fetchContentType: FetchContentType
+  public let newsletterEmailAddress: String?
   public let status: SubscriptionStatus
   public let unsubscribeHttpUrl: String?
   public let unsubscribeMailTo: String?
@@ -18,7 +22,10 @@ public struct Subscription {
     description: String?,
     subscriptionID: String,
     name: String,
-    newsletterEmailAddress: String,
+    type: SubscriptionType,
+    folder: String,
+    fetchContentType: FetchContentType,
+    newsletterEmailAddress: String?,
     status: SubscriptionStatus,
     unsubscribeHttpUrl: String?,
     unsubscribeMailTo: String?,
@@ -30,6 +37,9 @@ public struct Subscription {
     self.description = description
     self.subscriptionID = subscriptionID
     self.name = name
+    self.type = type
+    self.folder = folder
+    self.fetchContentType = fetchContentType
     self.newsletterEmailAddress = newsletterEmailAddress
     self.status = status
     self.unsubscribeHttpUrl = unsubscribeHttpUrl
@@ -44,4 +54,15 @@ public enum SubscriptionStatus {
   case active
   case deleted
   case unsubscribed
+}
+
+public enum SubscriptionType {
+  case newsletter
+  case feed
+}
+
+public enum FetchContentType {
+  case always
+  case never
+  case whenEmpty
 }

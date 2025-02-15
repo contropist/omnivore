@@ -16,6 +16,7 @@ private let logger = Logger(subsystem: "app.omnivore", category: "app-delegate")
   class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
       NSApplication.shared.delegate = self
+      NSWindow.allowsAutomaticWindowTabbing = false
       #if DEBUG
         if CommandLine.arguments.contains("--uitesting") {
           configureForUITests()
@@ -42,20 +43,23 @@ private let logger = Logger(subsystem: "app.omnivore", category: "app-delegate")
         }
       #endif
 
-      EventTracker.start()
-
       if let intercomKeys = AppKeys.sharedInstance?.intercom {
         Intercom.setApiKey(intercomKeys.apiKey, forAppId: intercomKeys.appID)
 
         if let userId = UserDefaults.standard.string(forKey: Keys.userIdKey) {
-          Intercom.registerUser(withUserId: userId)
+          let userAttributes = ICMUserAttributes()
+          userAttributes.userId = userId
+          Intercom.loginUser(with: userAttributes)
         } else {
-          Intercom.registerUnidentifiedUser()
+          Intercom.loginUnidentifiedUser()
         }
       }
 
       Services.registerBackgroundFetch()
       configureFirebase()
+
+      // TODO: remove after filter badge is re-enabled
+      UIApplication.shared.applicationIconBadgeNumber = 0
 
       // swiftlint:disable:next line_length
       NotificationCenter.default.addObserver(forName: Notification.Name("ReconfigurePushNotifications"), object: nil, queue: OperationQueue.main) { _ in

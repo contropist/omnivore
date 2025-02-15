@@ -3,18 +3,19 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
-import { getDocument as _getDocument } from 'pdfjs-dist/legacy/build/pdf'
+
 import {
-  TextItem,
-  PDFPageProxy,
+  getDocument as _getDocument,
   PDFDocumentProxy,
-} from 'pdfjs-dist/types/display/api'
+  PDFPageProxy,
+} from 'pdfjs-dist/legacy/build/pdf'
+import { TextItem } from 'pdfjs-dist/types/src/display/api'
 
 interface Page {
   lines: string[]
 }
 
-// Unused at the moment -- comented out for now to satisfy linter
+// Unused at the moment -- commented out for now to satisfy linter
 const MAX_TITLE_LENGTH = 95
 
 type MetadataInfoKey =
@@ -72,7 +73,7 @@ const getMetadataItem = async (
     .getMetadata()
     .then((metadata) => metadata.info as MetadataInfo)
     .then((info) => {
-      return info[key]
+      return info[key] as string
     })
 }
 
@@ -122,7 +123,7 @@ export const readPdfText = async (
 const parsePage = async (pdfPage: PDFPageProxy): Promise<Page> => {
   const rawContent = await pdfPage.getTextContent()
   return parsePageItems(
-    rawContent.items.filter((item): item is TextItem => 'str' in item)
+    rawContent.items.filter((item: any): item is TextItem => 'str' in item)
   )
 }
 
@@ -156,6 +157,7 @@ const parsePageItems = (pdfItems: TextItem[]): Page => {
       if (nextY != undefined) {
         const currentLineHeight: number = lineData[currentY].reduce(
           (finalValue, current) =>
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
             finalValue > current.height ? finalValue : current.height,
           -1
         )

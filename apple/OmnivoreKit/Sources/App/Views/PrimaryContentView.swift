@@ -2,96 +2,71 @@ import Models
 import Services
 import SwiftUI
 import Views
+import Transmission
 
-public struct PrimaryContentView: View {
-  let categories = [
-    PrimaryContentCategory.feed,
-    PrimaryContentCategory.profile
-  ]
+@MainActor public struct PrimaryContentView: View {
+  @State var showSnackbar = false
+  @State var snackbarMessage: String?
+  @State var snackbarUndoAction: (() -> Void)?
+
+  @State private var snackbarTimer: Timer?
 
   public var body: some View {
-    #if os(iOS)
-      if UIDevice.isIPad {
-        splitView
-      } else {
-        HomeView()
-      }
-    #elseif os(macOS)
-      splitView
-    #endif
-  }
+    ZStack {
+      WindowLink(level: .alert, transition: .move(edge: .bottom), isPresented: $showSnackbar) {
+        InformationalSnackbar(message: snackbarMessage, undoAction: snackbarUndoAction)
+      } label: {
+        EmptyView()
+      }.buttonStyle(.plain)
 
-  #if os(macOS)
-    private var splitView: some View {
-      NavigationView {
-        PrimaryContentCategory.feed.destinationView
-        Text(LocalText.navigationSelectLink)
-      }
-      .accentColor(.appGrayTextContrast)
-    }
-  #endif
-
-  #if os(iOS)
-    private var splitView: some View {
-      NavigationView {
-        // The first column is the sidebar.
-        PrimaryContentSidebar(categories: categories)
-
-        // Second column is the Primary Nav Stack
-        PrimaryContentCategory.feed.destinationView
-      }
-      .accentColor(.appGrayTextContrast)
-      .introspectSplitViewController {
-        $0.preferredSplitBehavior = .tile
-        $0.preferredPrimaryColumnWidth = 160
-        $0.presentsWithGesture = false
-        $0.displayModeButtonVisibility = .always
-      }
-    }
-  #endif
-}
-
-struct PrimaryContentSidebar: View {
-  @State private var selectedCategory: PrimaryContentCategory?
-  let categories: [PrimaryContentCategory]
-
-  var innerBody: some View {
-    List(categories) { category in
-      NavigationLink(
-        destination: category.destinationView,
-        tag: category,
-        selection: $selectedCategory,
-        label: { category.listLabel }
-      )
-      #if os(iOS)
-        .listRowBackground(
-          category == selectedCategory
-            ? Color.appGraySolid.opacity(0.4).cornerRadius(8)
-            : Color.clear.cornerRadius(8)
-        )
-      #endif
-    }
-    .listStyle(.sidebar)
-  }
-
-  var body: some View {
-    #if os(iOS)
       innerBody
-    #elseif os(macOS)
-      innerBody
-        .frame(minWidth: 200)
-        .toolbar {
-          ToolbarItem {
-            Button(
-              action: {
-                NSApp.keyWindow?.firstResponder?.tryToPerform(
-                  #selector(NSSplitViewController.toggleSidebar(_:)), with: nil
-                )
-              },
-              label: { Label(LocalText.navigationSelectSidebarToggle, systemImage: "sidebar.left") }
-            )
+    }
+      .onReceive(NSNotification.snackBarPublisher) { notification in
+        if let message = notification.userInfo?["message"] as? String {
+          snackbarUndoAction = notification.userInfo?["undoAction"] as? (() -> Void)
+          snackbarMessage = message
+          showSnackbar = true
+
+          let dismissAfter = notification.userInfo?["dismissAfter"] as? Int ?? 2000
+          if snackbarTimer == nil {
+            startTimer(amount: dismissAfter)
+          } else {
+            increaseTimeout(amount: dismissAfter)
           }
         }
+      }
+  }
+
+  public var innerBody: some View {
+    #if os(iOS)
+      if UIDevice.isIPad {
+        return AnyView(
+          LibrarySplitView()
+        )
+      } else {
+        return AnyView(
+          LibraryTabView()
+        )
+      }
+    #else
+      return AnyView(splitView)
     #endif
+  }
+
+  func startTimer(amount: Int) {
+    self.snackbarTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(amount / 1000), repeats: false) { _ in
+      DispatchQueue.main.async {
+        self.showSnackbar = false
+      }
+    }
+  }
+
+  func stopTimer() {
+    snackbarTimer?.invalidate()
+  }
+
+  func increaseTimeout(amount: Int) {
+    stopTimer()
+    startTimer(amount: amount)
   }
 }

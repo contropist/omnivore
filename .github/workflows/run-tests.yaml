@@ -5,19 +5,27 @@ on:
       - main
     paths-ignore:
       - 'apple/**'
+      - 'android/**'
   pull_request:
     branches:
       - main
     paths-ignore:
       - 'apple/**'
+      - 'android/**'
+
+env:
+  NEXT_PUBLIC_APP_ENV: prod
+  NEXT_PUBLIC_BASE_URL: http://localhost:3000
+  NEXT_PUBLIC_SERVER_BASE_URL: http://localhost:4000
+  NEXT_PUBLIC_HIGHLIGHTS_BASE_URL: http://localhost:3000
 
 jobs:
   run-code-tests:
     name: Run Codebase tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'omnivore-app' && 'ubuntu-latest-m' || 'ubuntu-latest' }}
     services:
       postgres:
-        image: postgres
+        image: ankane/pgvector
         env:
           POSTGRES_PASSWORD: postgres
         options: >-
@@ -27,23 +35,17 @@ jobs:
           --health-retries 5
         ports:
           - 5432
-      elastic:
-        image: docker.elastic.co/elasticsearch/elasticsearch:7.17.1
-        env:
-          discovery.type: single-node
-          http.cors.allow-origin: '*'
-          http.cors.enabled: true
-          http.cors.allow-headers: 'X-Requested-With,X-Auth-Token,Content-Type,Content-Length,Authorization'
-          http.cors.allow-credentials: true
+      redis:
+        image: redis
         options: >-
-          --health-cmd "curl http://0.0.0.0:9200/_cluster/health"
+          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
         ports:
-          - 9200
+          - 6379
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Initialize the database
@@ -53,9 +55,9 @@ jobs:
         env:
           PGPASSWORD: postgres
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: 14.18
+          node-version: 22.12.0
       - name: Get yarn cache directory path
         id: yarn-cache-dir-path
         run: echo "::set-output name=dir::$(source ~/.nvm/nvm.sh && yarn cache dir)"
@@ -65,35 +67,42 @@ jobs:
           yarn install --frozen-lockfile
       - name: Database Migration
         run: |
+          psql -h localhost -p ${{ job.services.postgres.ports[5432] }} -U postgres -c "CREATE USER app_user WITH ENCRYPTED PASSWORD 'app_pass';"
           yarn workspace @omnivore/db migrate
-          psql -h localhost -p ${{ job.services.postgres.ports[5432] }} -U postgres -c "CREATE USER app_user WITH ENCRYPTED PASSWORD 'app_pass';GRANT omnivore_user to app_user;"
+          psql -h localhost -p ${{ job.services.postgres.ports[5432] }} -U postgres -c "GRANT omnivore_user to app_user;"
         env:
           PG_HOST: localhost
           PG_PORT: ${{ job.services.postgres.ports[5432] }}
           PG_USER: postgres
           PG_PASSWORD: postgres
           PG_DB: omnivore_test
-          ELASTIC_URL: http://localhost:${{ job.services.elastic.ports[9200] }}/
           PGPASSWORD: postgres # This is required for the psql command to work without a password prompt
-      - name: TypeScript, Lint, Tests
+          PG_EXTRA_OPTIONS: '-c lock_timeout=2000'
+      - name: TypeScript Build and Lint
         run: |
           source ~/.nvm/nvm.sh
           yarn build
           yarn lint
+      - name: Tests
+        run: |
+          source ~/.nvm/nvm.sh
           yarn test
+        timeout-minutes: 10
         env:
           PG_HOST: localhost
           PG_PORT: ${{ job.services.postgres.ports[5432] }}
           PG_USER: app_user
           PG_PASSWORD: app_pass
           PG_DB: omnivore_test
-          PG_POOL_MAX: 10
-          ELASTIC_URL: http://localhost:${{ job.services.elastic.ports[9200] }}/
+          PG_LOGGER: debug
+          REDIS_URL: redis://localhost:${{ job.services.redis.ports[6379] }}
+          MQ_REDIS_URL: redis://localhost:${{ job.services.redis.ports[6379] }}
   build-docker-images:
     name: Build docker images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Build the API docker image
@@ -102,5 +111,5 @@ jobs:
         run: 'docker build --file packages/content-fetch/Dockerfile .'
       - name: Build the inbound-email-handler docker image
         run: 'docker build --file packages/inbound-email-handler/Dockerfile .'
-      - name: Build the content-fetch cloud function docker image
-        run: 'docker build --file packages/content-fetch/Dockerfile-gcf .'
+      - name: Build the tts docker image
+        run: 'docker build --file packages/text-to-speech/Dockerfile .'

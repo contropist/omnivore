@@ -1,4 +1,4 @@
-import { Box } from '../../elements/LayoutPrimitives'
+import { Box, SpanBox } from '../../elements/LayoutPrimitives'
 import {
   getTopOmnivoreAnchorElement,
   parseDomTree,
@@ -7,11 +7,25 @@ import {
   ScrollOffsetChangeset,
   useScrollWatcher,
 } from '../../../lib/hooks/useScrollWatcher'
-import { MutableRefObject, useEffect, useRef, useState } from 'react'
-import { Tweet } from 'react-twitter-widgets'
-import { render } from 'react-dom'
+import {
+  MutableRefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { isDarkTheme } from '../../../lib/themeUpdater'
 import { ArticleMutations } from '../../../lib/articleActions'
+import { Lightbox, SlideImage } from 'yet-another-react-lightbox'
+import 'yet-another-react-lightbox/styles.css'
+import Download from 'yet-another-react-lightbox/plugins/download'
+import Fullscreen from 'yet-another-react-lightbox/plugins/fullscreen'
+import Zoom from 'yet-another-react-lightbox/plugins/zoom'
+import Counter from 'yet-another-react-lightbox/plugins/counter'
+
+import loadjs from 'loadjs'
+import { LinkHoverBar } from '../../patterns/LinkHoverBar'
 
 export type ArticleProps = {
   articleId: string
@@ -21,6 +35,17 @@ export type ArticleProps = {
   initialReadingProgressTop?: number
   highlightHref: MutableRefObject<string | null>
   articleMutations: ArticleMutations
+  isAppleAppEmbed: boolean
+}
+
+type PageCoordinates = {
+  pageX: number
+  pageY: number
+}
+
+type LinkHoverData = {
+  href: string
+  pageCoordinate: PageCoordinates
 }
 
 export function Article(props: ArticleProps): JSX.Element {
@@ -38,6 +63,13 @@ export function Article(props: ArticleProps): JSX.Element {
   const clampToPercent = (float: number) => {
     return Math.floor(Math.max(0, Math.min(100, float)))
   }
+
+  const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [imageSrcs, setImageSrcs] = useState<SlideImage[]>([])
+  const [lightboxIndex, setlightBoxIndex] = useState(0)
+  const [linkHoverData, setlinkHoverData] = useState<
+    LinkHoverData | undefined
+  >()
 
   useEffect(() => {
     ;(async () => {
@@ -66,7 +98,10 @@ export function Article(props: ArticleProps): JSX.Element {
   // Post message to webkit so apple app embeds get progress updates
   // TODO: verify if ios still needs this code...seeems to be duplicated
   useEffect(() => {
-    if (typeof window?.webkit != 'undefined') {
+    if (
+      typeof window?.webkit != 'undefined' &&
+      'messageHandlers' in window.webkit
+    ) {
       window.webkit.messageHandlers.readingProgressUpdate?.postMessage({
         progress: readingProgress,
       })
@@ -82,6 +117,40 @@ export function Article(props: ArticleProps): JSX.Element {
       setReadingProgress(bottomProgress * 100)
     }
   }, 2500)
+
+  useEffect(() => {
+    const youtubePlayer = document.getElementById('_omnivore_youtube_video')
+
+    const updateScroll = () => {
+      const YOUTUBE_PLACEHOLDER_ID = 'omnivore-youtube-placeholder'
+      const youtubePlaceholder = document.getElementById(YOUTUBE_PLACEHOLDER_ID)
+
+      if (youtubePlayer) {
+        if (window.scrollY > 400) {
+          if (!youtubePlaceholder) {
+            const rect = youtubePlayer.getBoundingClientRect()
+            const placeholder = document.createElement('div')
+            placeholder.setAttribute('id', YOUTUBE_PLACEHOLDER_ID)
+            placeholder.style.width = rect.width + 'px'
+            placeholder.style.height = rect.height + 'px'
+            youtubePlayer.parentNode?.insertBefore(placeholder, youtubePlayer)
+          }
+          youtubePlayer.classList.add('is-sticky')
+        } else {
+          if (youtubePlaceholder) {
+            youtubePlayer.parentNode?.removeChild(youtubePlaceholder)
+          }
+          youtubePlayer.classList.remove('is-sticky')
+        }
+      }
+    }
+    if (youtubePlayer) {
+      window.addEventListener('scroll', updateScroll)
+    }
+    return () => {
+      window.removeEventListener('scroll', updateScroll) // clean up
+    }
+  }, [props])
 
   // Scroll to initial anchor position
   useEffect(() => {
@@ -141,22 +210,73 @@ export function Article(props: ArticleProps): JSX.Element {
       window.MathJax.typeset()
     }
 
-    const tweets = Array.from(
+    const tweetPlaceholders = Array.from(
       document.getElementsByClassName('tweet-placeholder')
     )
 
-    tweets.forEach((tweet) => {
-      render(
-        <Tweet
-          tweetId={tweet.getAttribute('data-tweet-id') || ''}
-          options={{
+    if (tweetPlaceholders.length > 0) {
+      ;(async () => {
+        const twScriptUrl = 'https://platform.twitter.com/widgets.js'
+        const twScriptWindowFieldName = 'twttr'
+        const twScriptName = twScriptWindowFieldName
+
+        await new Promise((resolve, reject) => {
+          if (!loadjs.isDefined(twScriptName)) {
+            loadjs(twScriptUrl, twScriptName)
+          }
+          loadjs.ready(twScriptName, {
+            success: () => {
+              if (window.twttr?.widgets) {
+                resolve(true)
+              } else {
+                resolve(false)
+              }
+            },
+            error: () =>
+              reject(new Error('Could not load remote twitter widgets js')),
+          })
+        })
+
+        tweetPlaceholders.forEach((tweetPlaceholder) => {
+          const tweetId = tweetPlaceholder.getAttribute('data-tweet-id')
+          if (!tweetId) return
+          window.twttr?.widgets?.createTweet(tweetId, tweetPlaceholder, {
             theme: isDarkTheme() ? 'dark' : 'light',
             align: 'center',
-          }}
-        />,
-        tweet
-      )
-    })
+            dnt: 'true',
+          })
+        })
+      })()
+    }
+  }, [])
+
+  useEffect(() => {
+    const tikTokPlaceholders = Array.from(
+      document.getElementsByClassName('tiktok-embed')
+    )
+
+    if (tikTokPlaceholders.length > 0) {
+      ;(async () => {
+        const tkScriptUrl = 'https://www.tiktok.com/embed.js'
+        const tkScriptWindowFieldName = 'tiktok'
+        const tkScriptName = tkScriptWindowFieldName
+
+        await new Promise((resolve, reject) => {
+          if (!loadjs.isDefined(tkScriptName)) {
+            loadjs(tkScriptUrl, tkScriptName)
+          }
+          loadjs.ready(tkScriptName, {
+            success: () => {
+              if (window.tiktokEmbed) {
+                window.tiktokEmbed.lib.render(tikTokPlaceholders)
+              }
+              resolve(true)
+            },
+            error: () => reject(new Error('Could not load TikTok handler')),
+          })
+        })
+      })()
+    }
   }, [])
 
   useEffect(() => {
@@ -170,7 +290,6 @@ export function Article(props: ArticleProps): JSX.Element {
       const img = element as HTMLImageElement
       const width = Number(img.getAttribute('data-omnivore-width'))
       const height = Number(img.getAttribute('data-omnivore-height'))
-      console.log('width and height: ', width, height)
 
       if (!isNaN(width) && !isNaN(height) && width < 100 && height < 100) {
         img.style.setProperty('width', `${width}px`)
@@ -195,14 +314,89 @@ export function Article(props: ArticleProps): JSX.Element {
         }
       }
     })
+
+    const allImages = Array.from(
+      document.querySelectorAll('img[data-omnivore-anchor-idx]')
+    )
+
+    const srcs = allImages.map((img) => {
+      return {
+        src: img.getAttribute('src') || '',
+      }
+    })
+    setImageSrcs(srcs)
+
+    allImages.forEach((element, idx) => {
+      const img = element as HTMLImageElement
+      img.style.cursor = 'zoom-in'
+      img.onclick = (event) => {
+        setlightBoxIndex(idx)
+        setLightboxOpen(true)
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    })
+  }, [props.content])
+
+  useEffect(() => {
+    if (lightboxOpen) {
+      window?.webkit?.messageHandlers.highlightAction?.postMessage({
+        actionID: 'dismissNavBars',
+      })
+    }
+  }, [lightboxOpen])
+
+  const lightboxPlugins = useMemo(() => {
+    if (props.isAppleAppEmbed) {
+      return [Fullscreen, Counter, Zoom]
+    } else {
+      return [Fullscreen, Download, Counter, Zoom]
+    }
+  }, [props])
+
+  // const linkMouseOver = useCallback(
+  //   (event: Event) => {
+  //     const element = event.target as HTMLLinkElement
+
+  //     setlinkHoverData({
+  //       href: element.href,
+  //       pageCoordinate: {
+  //         pageX: element.offsetLeft,
+  //         pageY: element.offsetTop - 45,
+  //       },
+  //     })
+  //   },
+  //   [props]
+  // )
+
+  // const linkMouseOut = useCallback(
+  //   (event: Event) => {
+  //     console.log('mouse out link', event.target)
+  //     setlinkHoverData(undefined)
+  //   },
+  //   [props]
+  // )
+
+  useEffect(() => {
+    const embeddedLinks = Array.from(
+      document.querySelectorAll('a[data-omnivore-anchor-idx]')
+    )
+
+    embeddedLinks.forEach((link: Element) => {
+      link.setAttribute('target', '_blank')
+      // link.addEventListener('mouseover', linkMouseOver)
+      // link.addEventListener('mouseout', linkMouseOut)
+    })
   }, [props.content])
 
   return (
     <>
-      <link
-        rel="stylesheet"
-        href={`https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.4.0/styles/${highlightTheme}.min.css`}
-      />
+      {!props.isAppleAppEmbed && (
+        <link
+          rel="stylesheet"
+          href={`/static/highlightjs/${highlightTheme}.min.css`}
+        />
+      )}
       <Box
         ref={articleContentRef}
         css={{
@@ -214,6 +408,36 @@ export function Article(props: ArticleProps): JSX.Element {
           __html: props.content,
         }}
       />
+      <SpanBox
+        onClick={(event) => {
+          event.stopPropagation()
+        }}
+      >
+        <Lightbox
+          open={lightboxOpen}
+          index={lightboxIndex}
+          close={() => setLightboxOpen(false)}
+          slides={imageSrcs}
+          plugins={lightboxPlugins}
+          controller={{ closeOnPullDown: true, closeOnBackdropClick: true }}
+          zoom={{
+            maxZoomPixelRatio: 3,
+          }}
+          render={{
+            buttonZoom: () => undefined,
+          }}
+        />
+      </SpanBox>
+      {linkHoverData && (
+        <>
+          <LinkHoverBar
+            anchorCoordinates={linkHoverData.pageCoordinate}
+            handleButtonClick={() => {
+              console.log('saved link hover: ', linkHoverData)
+            }}
+          />
+        </>
+      )}
     </>
   )
 }

@@ -1,24 +1,21 @@
-import { MailDataRequired } from '@sendgrid/helpers/classes/mail'
-import chai, { expect } from 'chai'
-import sinon from 'sinon'
-import sinonChai from 'sinon-chai'
+import { expect } from 'chai'
+import sinon, { SinonFakeTimers } from 'sinon'
 import supertest from 'supertest'
-import { StatusType } from '../../src/datalayer/user/model'
-import { searchPages } from '../../src/elastic/pages'
-import { User } from '../../src/entity/user'
-import { getRepository } from '../../src/entity/utils'
+import { StatusType, User } from '../../src/entity/user'
+import { getRepository } from '../../src/repository'
+import { userRepository } from '../../src/repository/user'
+import { isValidSignupRequest } from '../../src/routers/auth/auth_router'
 import { AuthProvider } from '../../src/routers/auth/auth_types'
 import { createPendingUserToken } from '../../src/routers/auth/jwt_helpers'
+import { searchAndCountLibraryItems } from '../../src/services/library_item'
+import { deleteUser, updateUser } from '../../src/services/user'
 import {
   comparePassword,
   generateVerificationToken,
   hashPassword,
 } from '../../src/utils/auth'
-import * as util from '../../src/utils/sendEmail'
-import { createTestUser, deleteTestUser, updateTestUser } from '../db'
+import { createTestUser } from '../db'
 import { generateFakeUuid, request } from '../util'
-
-chai.use(sinonChai)
 
 describe('auth router', () => {
   const route = '/api/auth'
@@ -45,8 +42,6 @@ describe('auth router', () => {
     let name: string
 
     context('when inputs are valid and user not exists', () => {
-      let fake: (msg: MailDataRequired) => Promise<boolean>
-
       before(() => {
         password = validPassword
         username = 'Some_username'
@@ -55,19 +50,11 @@ describe('auth router', () => {
       })
 
       afterEach(async () => {
-        const user = await getRepository(User).findOneBy({ name })
-        await deleteTestUser(user!.id)
+        const user = await userRepository.findOneBy({ name })
+        await deleteUser(user!.id)
       })
 
       context('when confirmation email sent', () => {
-        beforeEach(() => {
-          fake = sinon.replace(util, 'sendEmail', sinon.fake.resolves(true))
-        })
-
-        afterEach(() => {
-          sinon.restore()
-        })
-
         it('redirects to verify email', async () => {
           const res = await signupRequest(
             email,
@@ -82,32 +69,10 @@ describe('auth router', () => {
 
         it('creates the user with pending status and correct name', async () => {
           await signupRequest(email, password, name, username).expect(302)
-          const user = await getRepository(User).findOneBy({ name })
+          const user = await userRepository.findOneBy({ name })
 
           expect(user?.status).to.eql(StatusType.Pending)
           expect(user?.name).to.eql(name)
-        })
-      })
-
-      context('when confirmation email not sent', () => {
-        before(() => {
-          fake = sinon.replace(util, 'sendEmail', sinon.fake.resolves(false))
-        })
-
-        after(() => {
-          sinon.restore()
-        })
-
-        it('redirects to sign up page with error code INVALID_EMAIL', async () => {
-          const res = await signupRequest(
-            email,
-            password,
-            name,
-            username
-          ).expect(302)
-          expect(res.header.location).to.endWith(
-            '/email-signup?errorCodes=INVALID_EMAIL'
-          )
         })
       })
     })
@@ -123,15 +88,15 @@ describe('auth router', () => {
       })
 
       after(async () => {
-        await deleteTestUser(user.id)
+        await deleteUser(user.id)
       })
 
-      it('redirects to sign up page with error code USER_EXISTS', async () => {
+      it('redirects to sign up page with error code UNKNOWN', async () => {
         const res = await signupRequest(email, password, name, username).expect(
           302
         )
         expect(res.header.location).to.endWith(
-          '/email-signup?errorCodes=USER_EXISTS'
+          '/email-signup?errorCodes=UNKNOWN'
         )
       })
     })
@@ -190,7 +155,7 @@ describe('auth router', () => {
     })
 
     after(async () => {
-      await deleteTestUser(user.id)
+      await deleteUser(user.id)
     })
 
     context('when email and password are valid', () => {
@@ -211,19 +176,15 @@ describe('auth router', () => {
       })
     })
 
-    context('when user is not confirmed', async () => {
-      let fake: (msg: MailDataRequired) => Promise<boolean>
-
+    context('when user is not confirmed', () => {
       beforeEach(async () => {
-        fake = sinon.replace(util, 'sendEmail', sinon.fake.resolves(true))
-        await updateTestUser(user.id, { status: StatusType.Pending })
+        await updateUser(user.id, { status: StatusType.Pending })
         email = user.email
         password = correctPassword
       })
 
       afterEach(async () => {
-        await updateTestUser(user.id, { status: StatusType.Active })
-        sinon.restore()
+        await updateUser(user.id, { status: StatusType.Active })
       })
 
       it('redirects with error code PendingVerification', async () => {
@@ -231,11 +192,6 @@ describe('auth router', () => {
         expect(res.header.location).to.endWith(
           '/email-login?errorCodes=PENDING_VERIFICATION'
         )
-      })
-
-      it('sends a verification email', async () => {
-        await loginRequest(email, password).expect(302)
-        expect(fake).to.have.been.calledOnce
       })
     })
 
@@ -252,15 +208,15 @@ describe('auth router', () => {
       })
     })
 
-    context('when user has no password stored in db', async () => {
+    context('when user has no password stored in db', () => {
       before(async () => {
-        await updateTestUser(user.id, { password: '' })
+        await updateUser(user.id, { password: '' })
         email = user.email
         password = user.password!
       })
 
       after(async () => {
-        await updateTestUser(user.id, { password })
+        await updateUser(user.id, { password })
       })
 
       it('redirects with error code WrongSource', async () => {
@@ -295,18 +251,16 @@ describe('auth router', () => {
     let token: string
 
     before(async () => {
-      sinon.replace(util, 'sendEmail', sinon.fake.resolves(true))
       user = await createTestUser('pendingUser', undefined, 'password', true)
     })
 
     after(async () => {
-      sinon.restore()
-      await deleteTestUser(user.id)
+      await deleteUser(user.id)
     })
 
     context('when token is valid', () => {
-      before(() => {
-        token = generateVerificationToken(user.id)
+      beforeEach(async () => {
+        token = await generateVerificationToken({ id: user.id })
       })
 
       it('set auth token in cookie', async () => {
@@ -339,8 +293,17 @@ describe('auth router', () => {
     })
 
     context('when token is expired', () => {
-      before(() => {
-        token = generateVerificationToken(user.id, -1)
+      let clock: SinonFakeTimers
+
+      before(async () => {
+        clock = sinon.useFakeTimers()
+        token = await generateVerificationToken({ id: user.id })
+        // advance time by 1 hour
+        clock.tick(60 * 60 * 1000)
+      })
+
+      after(() => {
+        clock.restore()
       })
 
       it('redirects to confirm-email page with error code TokenExpired', async () => {
@@ -352,9 +315,9 @@ describe('auth router', () => {
     })
 
     context('when user is not found', () => {
-      before(() => {
+      before(async () => {
         const nonExistsUserId = generateFakeUuid()
-        token = generateVerificationToken(nonExistsUserId)
+        token = await generateVerificationToken({ id: nonExistsUserId })
       })
 
       it('redirects to confirm-email page with error code UserNotFound', async () => {
@@ -389,56 +352,25 @@ describe('auth router', () => {
         })
 
         after(async () => {
-          await deleteTestUser(user.id)
+          await deleteUser(user.id)
         })
 
         context('when email is verified', () => {
-          let fake: (msg: MailDataRequired) => Promise<boolean>
-
           before(async () => {
-            await updateTestUser(user.id, { status: StatusType.Active })
+            await updateUser(user.id, { status: StatusType.Active })
           })
 
           context('when reset password email sent', () => {
-            before(() => {
-              fake = sinon.replace(util, 'sendEmail', sinon.fake.resolves(true))
-            })
-
-            after(() => {
-              sinon.restore()
-            })
-
             it('redirects to forgot-password page with success message', async () => {
               const res = await emailResetPasswordReq(email).expect(302)
               expect(res.header.location).to.endWith('/auth/reset-sent')
-            })
-          })
-
-          context('when reset password email not sent', () => {
-            before(() => {
-              fake = sinon.replace(
-                util,
-                'sendEmail',
-                sinon.fake.resolves(false)
-              )
-            })
-
-            after(() => {
-              sinon.restore()
-            })
-
-            it('redirects to sign up page with error code INVALID_EMAIL', async () => {
-              const res = await emailResetPasswordReq(email).expect(302)
-              expect(res.header.location).to.endWith(
-                '/forgot-password?errorCodes=INVALID_EMAIL'
-              )
             })
           })
         })
 
         context('when email is not verified', () => {
           before(async () => {
-            await updateTestUser(user.id, { status: StatusType.Pending })
+            await updateUser(user.id, { status: StatusType.Pending })
           })
 
           it('redirects to email-login page with error code PENDING_VERIFICATION', async () => {
@@ -493,12 +425,12 @@ describe('auth router', () => {
     })
 
     after(async () => {
-      await deleteTestUser(user.id)
+      await deleteUser(user.id)
     })
 
     context('when token is valid', () => {
-      before(async () => {
-        token = generateVerificationToken(user.id)
+      beforeEach(async () => {
+        token = await generateVerificationToken({ id: user.id })
       })
 
       context('when password is not empty', () => {
@@ -515,8 +447,8 @@ describe('auth router', () => {
           const updatedUser = await getRepository(User).findOneBy({
             id: user?.id,
           })
-          expect(await comparePassword(password, updatedUser?.password!)).to.be
-            .true
+          const newPassword = updatedUser?.password || ''
+          expect(await comparePassword(password, newPassword)).to.be.true
         })
       })
 
@@ -542,8 +474,17 @@ describe('auth router', () => {
       })
 
       context('when token is expired', () => {
-        before(() => {
-          token = generateVerificationToken(user.id, -1)
+        let clock: SinonFakeTimers
+
+        before(async () => {
+          clock = sinon.useFakeTimers()
+          token = await generateVerificationToken({ id: user.id })
+          // advance time by 1 hour
+          clock.tick(60 * 60 * 1000)
+        })
+
+        after(() => {
+          clock.restore()
         })
 
         it('redirects to reset-password page with error code ExpiredToken', async () => {
@@ -569,6 +510,7 @@ describe('auth router', () => {
       return request
         .post(`${route}/create-account`)
         .set('X-OmnivoreClient', client)
+        .set('User-Agent', 'chrome')
         .set('Cookie', [`pendingUserAuth=${pendingUserAuth}`])
         .send({
           name,
@@ -578,19 +520,19 @@ describe('auth router', () => {
     }
 
     context('when inputs are valid and user not exists', () => {
-      let name = 'test_user'
-      let username = 'test_user'
-      let sourceUserId = 'test_source_user_id'
-      let email = 'test_user@omnivore.app'
-      let bio = 'test_bio'
-      let provider: AuthProvider = 'EMAIL'
+      const name = 'test_user'
+      const username = 'test_user'
+      const sourceUserId = 'test_source_user_id'
+      const email = 'test_user@omnivore.app'
+      const bio = 'test_bio'
+      const provider: AuthProvider = 'EMAIL'
 
       afterEach(async () => {
-        const user = await getRepository(User).findOneBy({ name })
-        await deleteTestUser(user!.id)
+        const user = await userRepository.findOneByOrFail({ name })
+        await deleteUser(user.id)
       })
 
-      it('adds popular reads to the library', async () => {
+      it('adds popular reads to the continue reading section', async () => {
         const pendingUserToken = await createPendingUserToken({
           sourceUserId,
           email,
@@ -605,11 +547,11 @@ describe('auth router', () => {
           pendingUserToken!,
           'web'
         ).expect(200)
-        const user = await getRepository(User).findOneBy({ name })
-        const [popularReads, count] = (await searchPages({}, user?.id!)) || [
-          [],
-          0,
-        ]
+        const user = await userRepository.findOneByOrFail({ name })
+        const { count } = await searchAndCountLibraryItems(
+          { query: 'in:inbox sort:read-desc is:reading' },
+          user.id
+        )
 
         expect(count).to.eql(3)
       })
@@ -629,14 +571,64 @@ describe('auth router', () => {
           pendingUserToken!,
           'ios'
         ).expect(200)
-        const user = await getRepository(User).findOneBy({ name })
-        const [popularReads, count] = (await searchPages({}, user?.id!)) || [
-          [],
-          0,
-        ]
+        const user = await userRepository.findOneByOrFail({ name })
+        const { count } = await searchAndCountLibraryItems(
+          { query: 'in:all' },
+          user.id
+        )
 
         expect(count).to.eql(4)
       })
     })
+  })
+})
+
+describe('isValidSignupRequest', () => {
+  it('returns true for normal looking requests', () => {
+    const result = isValidSignupRequest({
+      email: 'email@omnivore.app',
+      password: 'superDuperPassword',
+      name: "The User's Name",
+      username: 'foouser',
+    })
+    expect(result).to.be.true
+  })
+  it('returns false for requests w/missing info', () => {
+    let result = isValidSignupRequest({
+      password: 'superDuperPassword',
+      name: "The User's Name",
+      username: 'foouser',
+    })
+    expect(result).to.be.false
+
+    result = isValidSignupRequest({
+      email: 'email@omnivore.app',
+      name: "The User's Name",
+      username: 'foouser',
+    })
+    expect(result).to.be.false
+
+    result = isValidSignupRequest({
+      email: 'email@omnivore.app',
+      password: 'superDuperPassword',
+      username: 'foouser',
+    })
+    expect(result).to.be.false
+
+    result = isValidSignupRequest({
+      email: 'email@omnivore.app',
+      password: 'superDuperPassword',
+      name: "The User's Name",
+    })
+    expect(result).to.be.false
+  })
+
+  it('returns false for requests w/malicious info', () => {
+    const result = isValidSignupRequest({
+      password: 'superDuperPassword',
+      name: "You've won a cake sign up here: https://foo.bar",
+      username: 'foouser',
+    })
+    expect(result).to.be.false
   })
 })

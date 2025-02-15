@@ -16,10 +16,11 @@ export const articleFragment = gql`
     readingProgressTopPercent
     readingProgressAnchorIndex
     slug
-    isArchived
+    folder
     description
     linkId
     state
+    siteName
     wordsCount
   }
 `
@@ -30,6 +31,8 @@ export enum State {
   SUCCEEDED = 'SUCCEEDED',
   PROCESSING = 'PROCESSING',
   FAILED = 'FAILED',
+  DELETED = 'DELETED',
+  ARCHIVED = 'ARCHIVED',
 }
 
 export enum PageType {
@@ -57,7 +60,6 @@ export type ArticleFragmentData = {
   readingProgressTopPercent?: number
   readingProgressAnchorIndex: number
   slug: string
-  isArchived: boolean
   description: string
   linkId?: string
   state?: State

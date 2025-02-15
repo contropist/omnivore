@@ -1,18 +1,13 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/require-await */
 /* eslint-disable @typescript-eslint/no-floating-promises */
+import { DeepPartial } from 'typeorm'
 import {
-  addHighlightToPage,
-  deleteHighlight,
-  getHighlightById,
-  updateHighlight,
-} from '../../elastic/highlights'
-import { getPageById, updatePage } from '../../elastic/pages'
-import {
-  Highlight as HighlightData,
+  Highlight as HighlightEntity,
   HighlightType,
-  Label,
-} from '../../elastic/types'
+  RepresentationType,
+} from '../../entity/highlight'
+import { Label } from '../../entity/label'
 import { env } from '../../env'
 import {
   CreateHighlightError,
@@ -21,350 +16,273 @@ import {
   DeleteHighlightError,
   DeleteHighlightErrorCode,
   DeleteHighlightSuccess,
-  Highlight,
+  HighlightEdge,
+  HighlightsError,
+  HighlightsErrorCode,
+  HighlightsSuccess,
   MergeHighlightError,
   MergeHighlightErrorCode,
   MergeHighlightSuccess,
   MutationCreateHighlightArgs,
   MutationDeleteHighlightArgs,
   MutationMergeHighlightArgs,
-  MutationSetShareHighlightArgs,
   MutationUpdateHighlightArgs,
-  SetShareHighlightError,
-  SetShareHighlightErrorCode,
-  SetShareHighlightSuccess,
+  QueryHighlightsArgs,
   UpdateHighlightError,
   UpdateHighlightErrorCode,
   UpdateHighlightSuccess,
-  User,
 } from '../../generated/graphql'
+import { authTrx } from '../../repository'
+import { highlightRepository } from '../../repository/highlight'
+import {
+  createHighlight,
+  deleteHighlightById,
+  mergeHighlights,
+  searchHighlights,
+  updateHighlight,
+} from '../../services/highlights'
+import { Merge } from '../../util'
 import { analytics } from '../../utils/analytics'
-import { authorized, unescapeHtml } from '../../utils/helpers'
-
-const highlightDataToHighlight = (highlight: HighlightData): Highlight => ({
-  ...highlight,
-  user: highlight.userId as unknown as User,
-  updatedAt: highlight.updatedAt || highlight.createdAt,
-  replies: [],
-  reactions: [],
-  createdByMe: undefined as never,
-})
+import { authorized } from '../../utils/gql-utils'
 
 export const createHighlightResolver = authorized<
-  CreateHighlightSuccess,
+  Merge<CreateHighlightSuccess, { highlight: HighlightEntity }>,
   CreateHighlightError,
   MutationCreateHighlightArgs
->(async (_, { input }, { claims, log, pubsub }) => {
-  const { articleId: pageId } = input
-  const page = await getPageById(pageId)
-  if (!page) {
-    return {
-      errorCodes: [CreateHighlightErrorCode.NotFound],
-    }
-  }
-  if (page.userId !== claims.uid) {
-    return {
-      errorCodes: [CreateHighlightErrorCode.Unauthorized],
-    }
-  }
-  if (input.annotation && input.annotation.length > 4000) {
-    return {
-      errorCodes: [CreateHighlightErrorCode.BadData],
-    }
-  }
-
-  // unescape HTML entities
-  const annotation = input.annotation
-    ? unescapeHtml(input.annotation)
-    : undefined
-
+>(async (_, { input }, { log, pubsub, uid }) => {
   try {
-    const highlight: HighlightData = {
-      ...input,
-      updatedAt: new Date(),
-      createdAt: new Date(),
-      userId: claims.uid,
-      annotation,
-      type: input.type || HighlightType.Highlight,
-    }
-
-    if (
-      !(await addHighlightToPage(pageId, highlight, {
-        pubsub,
-        uid: claims.uid,
-      }))
-    ) {
-      return {
-        errorCodes: [CreateHighlightErrorCode.NotFound],
-      }
-    }
-
-    log.info('Creating a new highlight', {
-      highlight,
-      labels: {
-        source: 'resolver',
-        resolver: 'createHighlightResolver',
-        uid: claims.uid,
+    const newHighlight = await createHighlight(
+      {
+        ...input,
+        user: { id: uid },
+        libraryItem: { id: input.articleId },
+        highlightType: input.type || HighlightType.Highlight,
+        highlightPositionAnchorIndex: input.highlightPositionAnchorIndex || 0,
+        highlightPositionPercent: input.highlightPositionPercent || 0,
+        representation: input.representation || RepresentationType.Content,
       },
-    })
+      input.articleId,
+      uid,
+      pubsub
+    )
 
-    analytics.track({
-      userId: claims.uid,
+    analytics.capture({
+      distinctId: uid,
       event: 'highlight_created',
       properties: {
-        pageId,
+        libraryItemId: input.articleId,
         env: env.server.apiEnv,
       },
     })
 
-    return { highlight: highlightDataToHighlight(highlight) }
+    return { highlight: newHighlight }
   } catch (err) {
     log.error('Error creating highlight', err)
     return {
-      errorCodes: [CreateHighlightErrorCode.AlreadyExists],
+      errorCodes: [CreateHighlightErrorCode.Forbidden],
     }
   }
 })
 
 export const mergeHighlightResolver = authorized<
-  MergeHighlightSuccess,
+  Merge<MergeHighlightSuccess, { highlight: HighlightEntity }>,
   MergeHighlightError,
   MutationMergeHighlightArgs
->(async (_, { input }, { claims, log, pubsub }) => {
-  const { articleId: pageId } = input
+>(async (_, { input }, { log, pubsub, uid }) => {
   const { overlapHighlightIdList, ...newHighlightInput } = input
-  const page = await getPageById(pageId)
-  if (!page || !page.highlights) {
-    return {
-      errorCodes: [MergeHighlightErrorCode.NotFound],
-    }
-  }
-  if (page.userId !== claims.uid) {
-    return {
-      errorCodes: [MergeHighlightErrorCode.Unauthorized],
-    }
-  }
+
   /* Compute merged annotation form the order of highlights appearing on page */
   const mergedAnnotations: string[] = []
   const mergedLabels: Label[] = []
-  const pageHighlights = page.highlights.filter((highlight) => {
-    // filter out highlights that are in the overlap list
-    // and are of type highlight (not annotation or note)
-    if (
-      overlapHighlightIdList.includes(highlight.id) &&
-      highlight.type === HighlightType.Highlight
-    ) {
-      if (highlight.annotation) {
-        mergedAnnotations.push(highlight.annotation)
-      }
-      if (highlight.labels) {
-        // remove duplicates from labels by checking id
-        highlight.labels.forEach((label) => {
-          if (
-            !mergedLabels.find((mergedLabel) => mergedLabel.id === label.id)
-          ) {
-            mergedLabels.push(label)
-          }
-        })
-      }
-      return false
-    }
-    return true
-  })
+  const mergedColors: string[] = []
+
   try {
-    const highlight: HighlightData = {
+    const existingHighlights = await authTrx(
+      (tx) =>
+        tx
+          .withRepository(highlightRepository)
+          .findByLibraryItemId(input.articleId, uid),
+      {
+        replicationMode: 'replica',
+      }
+    )
+
+    existingHighlights.forEach((highlight) => {
+      // filter out highlights that are in the overlap list
+      // and are of type highlight (not annotation or note)
+      if (
+        overlapHighlightIdList.includes(highlight.id) &&
+        highlight.highlightType === HighlightType.Highlight
+      ) {
+        highlight.annotation && mergedAnnotations.push(highlight.annotation)
+
+        if (highlight.labels) {
+          // remove duplicates from labels by checking id
+          highlight.labels.forEach((label) => {
+            if (
+              !mergedLabels.find((mergedLabel) => mergedLabel.id === label.id)
+            ) {
+              mergedLabels.push(label)
+            }
+          })
+        }
+        // collect colors of overlap highlights
+        highlight.color && mergedColors.push(highlight.color)
+      }
+    })
+    // use new color or the color of the last overlap highlight
+    const color =
+      newHighlightInput.color || mergedColors[mergedColors.length - 1]
+
+    const highlight: DeepPartial<HighlightEntity> = {
       ...newHighlightInput,
-      updatedAt: new Date(),
-      createdAt: new Date(),
-      userId: claims.uid,
       annotation:
         mergedAnnotations.length > 0 ? mergedAnnotations.join('\n') : null,
-      type: HighlightType.Highlight,
-      labels: mergedLabels,
+      color,
+      user: { id: uid },
+      libraryItem: { id: input.articleId },
+      highlightPositionAnchorIndex: input.highlightPositionAnchorIndex || 0,
+      highlightPositionPercent: input.highlightPositionPercent || 0,
+      representation: input.representation || RepresentationType.Content,
     }
 
-    const merged = await updatePage(
-      pageId,
-      { highlights: pageHighlights.concat(highlight) },
-      { pubsub, uid: claims.uid }
-    )
-    if (!merged) {
-      throw new Error('Failed to create merged highlight')
-    }
-
-    log.info('Creating a merged highlight', {
+    const newHighlight = await mergeHighlights(
+      overlapHighlightIdList,
       highlight,
-      labels: {
-        source: 'resolver',
-        resolver: 'mergeHighlightResolver',
-        uid: claims.uid,
-        pageId,
+      mergedLabels,
+      input.articleId,
+      uid,
+      pubsub
+    )
+
+    analytics.capture({
+      distinctId: uid,
+      event: 'highlight_created',
+      properties: {
+        libraryItemId: input.articleId,
+        env: env.server.apiEnv,
       },
     })
 
     return {
-      highlight: highlightDataToHighlight(highlight),
+      highlight: newHighlight,
       overlapHighlightIdList: input.overlapHighlightIdList,
     }
   } catch (e) {
-    log.info('Failed to create a merged highlight', {
-      error: e,
-      labels: {
-        source: 'resolver',
-        resolver: 'mergeHighlightResolver',
-        uid: claims.uid,
-      },
-    })
-
+    log.error('Error merging highlight', e)
     return {
-      errorCodes: [MergeHighlightErrorCode.AlreadyExists],
+      errorCodes: [MergeHighlightErrorCode.Forbidden],
     }
   }
 })
 
 export const updateHighlightResolver = authorized<
-  UpdateHighlightSuccess,
+  Merge<UpdateHighlightSuccess, { highlight: HighlightEntity }>,
   UpdateHighlightError,
   MutationUpdateHighlightArgs
->(async (_, { input }, { pubsub, claims, log }) => {
-  const highlight = await getHighlightById(input.highlightId)
+>(async (_, { input }, { pubsub, uid, log }) => {
+  try {
+    const updatedHighlight = await updateHighlight(
+      input.highlightId,
+      {
+        annotation: input.annotation,
+        html: input.html,
+        quote: input.quote,
+        color: input.color,
+      },
+      uid,
+      pubsub
+    )
 
-  if (!highlight?.id) {
-    return {
-      errorCodes: [UpdateHighlightErrorCode.NotFound],
-    }
-  }
-
-  if (highlight.userId !== claims.uid) {
+    return { highlight: updatedHighlight }
+  } catch (error) {
+    log.error('updateHighlightResolver error', error)
     return {
       errorCodes: [UpdateHighlightErrorCode.Forbidden],
     }
   }
-
-  // unescape HTML entities
-  const annotation = input.annotation
-    ? unescapeHtml(input.annotation)
-    : undefined
-  const quote = input.quote ? unescapeHtml(input.quote) : highlight.quote
-
-  const updatedHighlight: HighlightData = {
-    ...highlight,
-    annotation,
-    quote,
-    updatedAt: new Date(),
-  }
-
-  log.info('Updating a highlight', {
-    updatedHighlight,
-    labels: {
-      source: 'resolver',
-      resolver: 'updateHighlightResolver',
-      uid: claims.uid,
-    },
-  })
-
-  const updated = await updateHighlight(updatedHighlight, {
-    pubsub,
-    uid: claims.uid,
-  })
-
-  if (!updated) {
-    return {
-      errorCodes: [UpdateHighlightErrorCode.NotFound],
-    }
-  }
-
-  return { highlight: highlightDataToHighlight(updatedHighlight) }
 })
 
 export const deleteHighlightResolver = authorized<
-  DeleteHighlightSuccess,
+  Merge<DeleteHighlightSuccess, { highlight: HighlightEntity }>,
   DeleteHighlightError,
   MutationDeleteHighlightArgs
->(async (_, { highlightId }, { claims, log, pubsub }) => {
-  const highlight = await getHighlightById(highlightId)
+>(async (_, { highlightId }, { log }) => {
+  try {
+    const deletedHighlight = await deleteHighlightById(highlightId)
 
-  if (!highlight?.id) {
-    return {
-      errorCodes: [DeleteHighlightErrorCode.NotFound],
+    if (!deletedHighlight) {
+      return {
+        errorCodes: [DeleteHighlightErrorCode.NotFound],
+      }
     }
-  }
 
-  if (highlight.userId !== claims.uid) {
+    return { highlight: deletedHighlight }
+  } catch (error) {
+    log.error('deleteHighlightResolver error', error)
     return {
       errorCodes: [DeleteHighlightErrorCode.Forbidden],
     }
   }
-
-  const deleted = await deleteHighlight(highlightId, {
-    pubsub,
-    uid: claims.uid,
-  })
-
-  if (!deleted) {
-    return {
-      errorCodes: [DeleteHighlightErrorCode.NotFound],
-    }
-  }
-
-  log.info('Deleting a highlight', {
-    highlight,
-    labels: {
-      source: 'resolver',
-      resolver: 'deleteHighlightResolver',
-      uid: claims.uid,
-    },
-  })
-
-  return { highlight: highlightDataToHighlight(highlight) }
 })
 
-export const setShareHighlightResolver = authorized<
-  SetShareHighlightSuccess,
-  SetShareHighlightError,
-  MutationSetShareHighlightArgs
->(async (_, { input: { id, share } }, { pubsub, claims, log }) => {
-  const highlight = await getHighlightById(id)
+type PartialHighlightEdge = Merge<
+  HighlightEdge,
+  {
+    node: HighlightEntity
+  }
+>
+type PartialHighlightsSuccess = Merge<
+  HighlightsSuccess,
+  {
+    edges: PartialHighlightEdge[]
+  }
+>
+export const highlightsResolver = authorized<
+  PartialHighlightsSuccess,
+  HighlightsError,
+  QueryHighlightsArgs
+>(async (_, { after, first, query }, { uid, log }) => {
+  const limit = first || 10
+  const offset = parseInt(after || '0')
+  if (
+    isNaN(offset) ||
+    offset < 0 ||
+    limit > 50 ||
+    (query?.length && query.length > 1000)
+  ) {
+    log.error('Invalid args', { after, first, query })
 
-  if (!highlight?.id) {
     return {
-      errorCodes: [SetShareHighlightErrorCode.NotFound],
+      errorCodes: [HighlightsErrorCode.BadRequest],
     }
   }
 
-  if (highlight.userId !== claims.uid) {
-    return {
-      errorCodes: [SetShareHighlightErrorCode.Forbidden],
-    }
+  const highlights = await searchHighlights(
+    uid,
+    query || undefined,
+    limit + 1,
+    offset
+  )
+
+  const hasNextPage = highlights.length > limit
+  if (hasNextPage) {
+    highlights.pop()
   }
+  const endCursor = String(offset + highlights.length)
 
-  const sharedAt = share ? new Date() : null
+  const edges = highlights.map((highlight) => ({
+    cursor: endCursor,
+    node: highlight,
+  }))
 
-  log.info(`${share ? 'S' : 'Uns'}haring a highlight`, {
-    highlight,
-    labels: {
-      source: 'resolver',
-      resolver: 'setShareHighlightResolver',
-      userId: highlight.userId,
+  return {
+    edges,
+    pageInfo: {
+      startCursor: String(offset),
+      endCursor,
+      hasPreviousPage: offset > 0,
+      hasNextPage,
     },
-  })
-
-  const updatedHighlight: HighlightData = {
-    ...highlight,
-    sharedAt,
-    updatedAt: new Date(),
   }
-
-  const updated = await updateHighlight(updatedHighlight, {
-    pubsub,
-    uid: claims.uid,
-  })
-
-  if (!updated) {
-    return {
-      errorCodes: [SetShareHighlightErrorCode.NotFound],
-    }
-  }
-
-  return { highlight: highlightDataToHighlight(updatedHighlight) }
 })

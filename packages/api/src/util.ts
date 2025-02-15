@@ -1,10 +1,15 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/naming-convention */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import os from 'os'
 import * as dotenv from 'dotenv'
+import os from 'os'
 
-interface BackendEnv {
+interface redisConfig {
+  url?: string
+  cert?: string
+}
+
+export interface BackendEnv {
   pg: {
     host: string
     port: number
@@ -14,6 +19,14 @@ interface BackendEnv {
     pool: {
       max: number
     }
+    replication: boolean
+    replica: {
+      host: string
+      port: number
+      userName: string
+      password: string
+      dbName: string
+    }
   }
   server: {
     jwtSecret: string
@@ -21,11 +34,11 @@ interface BackendEnv {
     gateway_url: string
     apiEnv: string
     instanceId: string
+    trustProxy: boolean
+    internalApiUrl: string
   }
   client: {
     url: string
-    previewGenerationServiceUrl: string
-    previewImageWrapperId: string
   }
   google: {
     auth: {
@@ -35,11 +48,15 @@ interface BackendEnv {
       secret: string
     }
   }
-  segment: {
-    writeKey: string
+  posthog: {
+    apiKey: string
   }
   intercom: {
     token: string
+    secretKey: string
+    webSecret: string
+    iosSecret: string
+    androidSecret: string
   }
   sentry: {
     dsn: string
@@ -56,6 +73,7 @@ interface BackendEnv {
   }
   dev: {
     isLocal: boolean
+    autoVerify: boolean
   }
   queue: {
     location: string
@@ -66,16 +84,23 @@ interface BackendEnv {
     integrationTaskHandlerUrl: string
     textToSpeechTaskHandlerUrl: string
     recommendationTaskHandlerUrl: string
+    thumbnailTaskHandlerUrl: string
+    integrationExporterUrl: string
+    integrationImporterUrl: string
+    importerMetricsUrl: string
+    exportTaskHandlerUrl: string
   }
   fileUpload: {
     gcsUploadBucket: string
     gcsUploadSAKeyFilePath: string
     gcsUploadPrivateBucket: string
+    dailyUploadLimit: number
+    useLocalStorage: boolean
+    localMinioUrl: string
+    internalMinioUrl: string
   }
-  elastic: {
-    url: string
-    username: string
-    password: string
+  email: {
+    domain: string
   }
   sender: {
     message: string
@@ -87,13 +112,10 @@ interface BackendEnv {
     reminderTemplateId: string
     resetPasswordTemplateId: string
     installationTemplateId: string
+    verificationTemplateId: string
   }
   readwise: {
     apiUrl: string
-  }
-  azure: {
-    speechKey: string
-    speechRegion: string
   }
   gcp: {
     location: string
@@ -102,23 +124,28 @@ interface BackendEnv {
   pocket: {
     consumerKey: string
   }
-}
-
-/***
- * Checks if we are running on Google App Engine.
- * See https://cloud.google.com/appengine/docs/standard/nodejs/runtime#environment_variables
- */
-export function isAppEngine(): boolean {
-  return (
-    process.env.GOOGLE_CLOUD_PROJECT !== undefined &&
-    process.env.GAE_INSTANCE !== undefined &&
-    process.env.GAE_SERVICE !== undefined &&
-    process.env.GAE_VERSION !== undefined
-  )
+  subscription: {
+    feed: {
+      max: number
+    }
+  }
+  redis: {
+    mq: redisConfig
+    cache: redisConfig
+  }
+  notion: {
+    clientId: string
+    clientSecret: string
+    authUrl: string
+  }
+  score: {
+    apiUrl: string
+  }
 }
 
 const nullableEnvVars = [
   'INTERCOM_TOKEN',
+  'INTERCOM_SECRET_KEY',
   'GAE_INSTANCE',
   'SENTRY_DSN',
   'SENTRY_AUTH_TOKEN',
@@ -132,18 +159,15 @@ const nullableEnvVars = [
   'PUPPETEER_QUEUE_NAME',
   'CONTENT_FETCH_URL',
   'CONTENT_FETCH_GCF_URL',
-  'PREVIEW_IMAGE_WRAPPER_ID',
-  'PREVIEW_GENERATION_SERVICE_URL',
   'GCS_UPLOAD_SA_KEY_FILE_PATH',
   'GAUTH_IOS_CLIENT_ID',
   'GAUTH_ANDROID_CLIENT_ID',
   'GAUTH_CLIENT_ID',
   'GAUTH_SECRET',
-  'SEGMENT_WRITE_KEY',
+  'POSTHOG_API_KEY',
   'TWITTER_BEARER_TOKEN',
-  'ELASTIC_USERNAME',
-  'ELASTIC_PASSWORD',
   'GCS_UPLOAD_PRIVATE_BUCKET',
+  'GCS_UPLOAD_DAILY_LIMIT',
   'SENDER_MESSAGE',
   'SENDER_FEEDBACK',
   'SENDER_GENERAL',
@@ -154,22 +178,42 @@ const nullableEnvVars = [
   'READWISE_API_URL',
   'INTEGRATION_TASK_HANDLER_URL',
   'TEXT_TO_SPEECH_TASK_HANDLER_URL',
-  'AZURE_SPEECH_KEY',
-  'AZURE_SPEECH_REGION',
   'GCP_LOCATION',
   'RECOMMENDATION_TASK_HANDLER_URL',
   'POCKET_CONSUMER_KEY',
+  'THUMBNAIL_TASK_HANDLER_URL',
+  'SENDGRID_VERIFICATION_TEMPLATE_ID',
+  'REMINDER_TASK_HANDLER_URL',
+  'TRUST_PROXY',
+  'INTEGRATION_EXPORTER_URL',
+  'INTEGRATION_IMPORTER_URL',
+  'SUBSCRIPTION_FEED_MAX',
+  'REDIS_URL',
+  'REDIS_CERT',
+  'MQ_REDIS_URL',
+  'MQ_REDIS_CERT',
+  'IMPORTER_METRICS_COLLECTOR_URL',
+  'INTERNAL_API_URL',
+  'NOTION_CLIENT_ID',
+  'NOTION_CLIENT_SECRET',
+  'NOTION_AUTH_URL',
+  'SCORE_API_URL',
+  'PG_REPLICATION',
+  'PG_REPLICA_HOST',
+  'PG_REPLICA_PORT',
+  'PG_REPLICA_USER',
+  'PG_REPLICA_PASSWORD',
+  'PG_REPLICA_DB',
+  'AUTO_VERIFY',
+  'INTERCOM_WEB_SECRET',
+  'INTERCOM_IOS_SECRET',
+  'INTERCOM_ANDROID_SECRET',
+  'EXPORT_TASK_HANDLER_URL',
+  'LOCAL_MINIO_URL',
+  'GCS_USE_LOCAL_HOST',
+  'LOCAL_EMAIL_DOMAIN',
+  'AWS_S3_ENDPOINT_URL',
 ] // Allow some vars to be null/empty
-
-/* If not in GAE and Prod/QA/Demo env (f.e. on localhost/dev env), allow following env vars to be null */
-if (
-  !isAppEngine() &&
-  ['prod', 'qa', 'demo'].indexOf(process.env.API_ENV || '') === -1
-) {
-  nullableEnvVars.push(
-    ...['GCS_UPLOAD_BUCKET', 'PREVIEW_GENERATION_SERVICE_URL']
-  )
-}
 
 const envParser =
   (env: { [key: string]: string | undefined }) =>
@@ -185,9 +229,18 @@ const envParser =
     )
   }
 
+interface Dict<T> {
+  [key: string]: T | undefined
+}
+
 export function getEnv(): BackendEnv {
   // Dotenv parses env file merging into proces.env which is then read into custom struct here.
   dotenv.config()
+
+  /* If not in GAE and Prod/QA/Demo env (f.e. on localhost/dev env), allow following env vars to be null */
+  if (process.env.API_ENV == 'local') {
+    nullableEnvVars.push(...['GCS_UPLOAD_BUCKET'])
+  }
 
   const parse = envParser(process.env)
   const pg = {
@@ -199,6 +252,18 @@ export function getEnv(): BackendEnv {
     pool: {
       max: parseInt(parse('PG_POOL_MAX'), 10),
     },
+
+    replication: parse('PG_REPLICATION') === 'true',
+    replica: {
+      host: parse('PG_REPLICA_HOST'),
+      port: parseInt(parse('PG_REPLICA_PORT'), 10),
+      userName: parse('PG_REPLICA_USER'),
+      password: parse('PG_REPLICA_PASSWORD'),
+      dbName: parse('PG_REPLICA_DB'),
+    },
+  }
+  const email = {
+    domain: parse('LOCAL_EMAIL_DOMAIN'),
   }
   const server = {
     jwtSecret: parse('JWT_SECRET'),
@@ -207,11 +272,11 @@ export function getEnv(): BackendEnv {
     apiEnv: parse('API_ENV'),
     instanceId:
       parse('GAE_INSTANCE') || `x${os.userInfo().username}_${os.hostname()}`,
+    trustProxy: parse('TRUST_PROXY') === 'true',
+    internalApiUrl: parse('INTERNAL_API_URL'),
   }
   const client = {
     url: parse('CLIENT_URL'),
-    previewGenerationServiceUrl: parse('PREVIEW_GENERATION_SERVICE_URL'),
-    previewImageWrapperId: parse('PREVIEW_IMAGE_WRAPPER_ID'),
   }
   const google = {
     auth: {
@@ -221,11 +286,15 @@ export function getEnv(): BackendEnv {
       secret: parse('GAUTH_SECRET'),
     },
   }
-  const segment = {
-    writeKey: parse('SEGMENT_WRITE_KEY'),
+  const posthog = {
+    apiKey: parse('POSTHOG_API_KEY'),
   }
   const intercom = {
     token: parse('INTERCOM_TOKEN'),
+    secretKey: parse('INTERCOM_SECRET_KEY'),
+    webSecret: parse('INTERCOM_WEB_SECRET'),
+    iosSecret: parse('INTERCOM_IOS_SECRET'),
+    androidSecret: parse('INTERCOM_ANDROID_SECRET'),
   }
   const sentry = {
     dsn: parse('SENTRY_DSN'),
@@ -234,7 +303,8 @@ export function getEnv(): BackendEnv {
     host: parse('JAEGER_HOST'),
   }
   const dev = {
-    isLocal: !isAppEngine(),
+    isLocal: parse('API_ENV') == 'local',
+    autoVerify: parse('AUTO_VERIFY') === 'true',
   }
   const queue = {
     location: parse('PUPPETEER_QUEUE_LOCATION'),
@@ -245,6 +315,11 @@ export function getEnv(): BackendEnv {
     integrationTaskHandlerUrl: parse('INTEGRATION_TASK_HANDLER_URL'),
     textToSpeechTaskHandlerUrl: parse('TEXT_TO_SPEECH_TASK_HANDLER_URL'),
     recommendationTaskHandlerUrl: parse('RECOMMENDATION_TASK_HANDLER_URL'),
+    thumbnailTaskHandlerUrl: parse('THUMBNAIL_TASK_HANDLER_URL'),
+    integrationExporterUrl: parse('INTEGRATION_EXPORTER_URL'),
+    integrationImporterUrl: parse('INTEGRATION_IMPORTER_URL'),
+    importerMetricsUrl: parse('IMPORTER_METRICS_COLLECTOR_URL'),
+    exportTaskHandlerUrl: parse('EXPORT_TASK_HANDLER_URL'),
   }
   const imageProxy = {
     url: parse('IMAGE_PROXY_URL'),
@@ -257,11 +332,12 @@ export function getEnv(): BackendEnv {
     gcsUploadBucket: parse('GCS_UPLOAD_BUCKET'),
     gcsUploadSAKeyFilePath: parse('GCS_UPLOAD_SA_KEY_FILE_PATH'),
     gcsUploadPrivateBucket: parse('GCS_UPLOAD_PRIVATE_BUCKET'),
-  }
-  const elastic = {
-    url: parse('ELASTIC_URL'),
-    username: parse('ELASTIC_USERNAME'),
-    password: parse('ELASTIC_PASSWORD'),
+    dailyUploadLimit: parse('GCS_UPLOAD_DAILY_LIMIT')
+      ? parseInt(parse('GCS_UPLOAD_DAILY_LIMIT'), 10)
+      : 5, // default to 5
+    useLocalStorage: parse('GCS_USE_LOCAL_HOST') == 'true',
+    localMinioUrl: parse('LOCAL_MINIO_URL'),
+    internalMinioUrl: parse('AWS_S3_ENDPOINT_URL'),
   }
   const sender = {
     message: parse('SENDER_MESSAGE'),
@@ -274,15 +350,11 @@ export function getEnv(): BackendEnv {
     reminderTemplateId: parse('SENDGRID_REMINDER_TEMPLATE_ID'),
     resetPasswordTemplateId: parse('SENDGRID_RESET_PASSWORD_TEMPLATE_ID'),
     installationTemplateId: parse('SENDGRID_INSTALLATION_TEMPLATE_ID'),
+    verificationTemplateId: parse('SENDGRID_VERIFICATION_TEMPLATE_ID'),
   }
 
   const readwise = {
     apiUrl: parse('READWISE_API_URL'),
-  }
-
-  const azure = {
-    speechKey: parse('AZURE_SPEECH_KEY'),
-    speechRegion: parse('AZURE_SPEECH_REGION'),
   }
 
   const gcp = {
@@ -293,12 +365,39 @@ export function getEnv(): BackendEnv {
     consumerKey: parse('POCKET_CONSUMER_KEY'),
   }
 
+  const subscription = {
+    feed: {
+      max: parse('SUBSCRIPTION_FEED_MAX')
+        ? parseInt(parse('SUBSCRIPTION_FEED_MAX'), 10)
+        : 256, // default to 256
+    },
+  }
+  const redis = {
+    mq: {
+      url: parse('MQ_REDIS_URL'),
+      cert: parse('MQ_REDIS_CERT')?.replace(/\\n/g, '\n'), // replace \n with new line
+    },
+    cache: {
+      url: parse('REDIS_URL'),
+      cert: parse('REDIS_CERT')?.replace(/\\n/g, '\n'), // replace \n with new line
+    },
+  }
+  const notion = {
+    clientId: parse('NOTION_CLIENT_ID'),
+    clientSecret: parse('NOTION_CLIENT_SECRET'),
+    authUrl: parse('NOTION_AUTH_URL'),
+  }
+  const score = {
+    apiUrl: parse('SCORE_API_URL') || 'http://digest-score/batch',
+  }
+
   return {
     pg,
     client,
+    email,
     server,
     google,
-    segment,
+    posthog,
     intercom,
     sentry,
     jaeger,
@@ -307,13 +406,15 @@ export function getEnv(): BackendEnv {
     dev,
     fileUpload,
     queue,
-    elastic,
     sender,
     sendgrid,
     readwise,
-    azure,
     gcp,
     pocket,
+    subscription,
+    redis,
+    notion,
+    score,
   }
 }
 

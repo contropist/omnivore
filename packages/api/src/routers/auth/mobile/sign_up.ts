@@ -1,17 +1,19 @@
 /* eslint-disable @typescript-eslint/restrict-template-expressions */
+import { userRepository } from '../../../repository/user'
+import { createUser } from '../../../services/create_user'
+import { hashPassword } from '../../../utils/auth'
+import { logger } from '../../../utils/logger'
 import { decodeAppleToken } from '../apple_auth'
-import { decodeGoogleToken } from '../google_auth'
+import { isValidSignupRequest } from '../auth_router'
 import {
+  AuthProvider,
   DecodeTokenResult,
   JsonResponsePayload,
-  AuthProvider,
   PendingUserTokenPayload,
 } from '../auth_types'
+import { decodeGoogleToken } from '../google_auth'
 import { createPendingUserToken, suggestedUsername } from '../jwt_helpers'
-import UserModel from '../../../datalayer/user'
-import { hashPassword } from '../../../utils/auth'
-import { createUser } from '../../../services/create_user'
-import { isValidSignupRequest } from '../auth_router'
+import { env } from '../../../env'
 
 export async function createMobileSignUpResponse(
   isAndroid: boolean,
@@ -40,7 +42,7 @@ export async function createMobileSignUpResponse(
 
     throw new Error(`Missing or unsupported provider ${provider}`)
   } catch (e) {
-    console.log('createMobileSignUpResponse error', e)
+    logger.info('createMobileSignUpResponse error', e)
     return signUpFailedPayload
   }
 }
@@ -65,7 +67,7 @@ export async function createMobileEmailSignUpResponse(
       name: name.trim(),
       username: username.trim().toLowerCase(),
       password: hashedPassword,
-      pendingConfirmation: true,
+      pendingConfirmation: !env.dev.autoVerify,
     })
 
     return {
@@ -73,7 +75,7 @@ export async function createMobileEmailSignUpResponse(
       json: {},
     }
   } catch (e) {
-    console.log('error creating mobile email sign up response', e)
+    logger.info('error creating mobile email sign up response', e)
     return signUpFailedPayload
   }
 }
@@ -96,8 +98,7 @@ async function createSignUpResponsePayload(
     }
 
     // check if user exists
-    const userModel = new UserModel()
-    const existingUser = await userModel.getWhere({ email })
+    const existingUser = await userRepository.findOneBy({ email })
 
     if (existingUser) {
       return {
@@ -131,7 +132,7 @@ async function createSignUpResponsePayload(
       json: { pendingUserToken, pendingUserProfile },
     }
   } catch (e) {
-    console.log('createSignUpResponsePayload error', e)
+    logger.info('createSignUpResponsePayload error', e)
     return signUpFailedPayload
   }
 }

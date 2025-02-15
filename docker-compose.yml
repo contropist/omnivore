@@ -1,83 +1,77 @@
 version: '3'
+x-postgres:
+  &postgres-common
+  image: "ankane/pgvector:v0.5.1"
+  user: postgres
+  healthcheck:
+    test: "exit 0"
+    interval: 2s
+    timeout: 12s
+    retries: 3
+
+
 services:
   postgres:
-    image: "postgres:12.8"
+    <<: *postgres-common
     container_name: "omnivore-postgres"
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=omnivore
-      - PG_POOL_MAX=20
-    healthcheck:
-      test: "exit 0"
-      interval: 2s
-      timeout: 12s
-      retries: 3
     expose:
       - 5432
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: omnivore
+      PG_POOL_MAX: 20
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost replication all 0.0.0.0/0 md5"
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    command: |
+      postgres 
+      -c wal_level=replica 
+      -c hot_standby=on 
+      -c max_wal_senders=10 
+      -c max_replication_slots=10 
+      -c hot_standby_feedback=on
+
+  postgres-replica:
+    <<: *postgres-common
+    container_name: "omnivore-postgres-replica"
+    expose:
+      - 5433
+    ports:
+      - "5433:5432"
+    environment:
+      PGUSER: replicator
+      PGPASSWORD: replicator_password
+    command: |
+      bash -c "
+      until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot --host=postgres --port=5432
+      do
+      echo 'Waiting for primary to connect...'
+      sleep 1s
+      done
+      echo 'Backup done, starting replica...'
+      chmod 0700 /var/lib/postgresql/data
+      postgres
+      "
+    depends_on:
+      - postgres
 
   migrate:
     build:
       context: .
       dockerfile: ./packages/db/Dockerfile
     container_name: "omnivore-migrate"
-    command: '/bin/sh ./packages/db/setup.sh' # Also create a demo user with email: demo@omnivore.app, password: demo
+    command: '/bin/sh ./packages/db/setup.sh' # Also create a demo user with email: demo@omnivore.app, password: demo_password
     environment:
       - PGPASSWORD=postgres
+      - POSTGRES_USER=postgres
       - PG_HOST=postgres
-      - PG_USER=postgres
-      - PG_PASSWORD=postgres
+      - PG_PASSWORD=app_pass
       - PG_DB=omnivore
-      - ELASTIC_URL=http://elastic:9200
-      - ELASTIC_USERNAME=blank
-      - ELASTIC_PASSWORD=blank
     depends_on:
       postgres:
         condition: service_healthy
-      elastic:
-        condition: service_healthy
-
-  elastic:
-    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.1
-    container_name: "omnivore-elastic"
-    healthcheck:
-      test: curl 0.0.0.0:9200/_cat/health >/dev/null || exit 1
-      interval: 2s
-      timeout: 2s
-      retries: 5
-    environment:
-      - discovery.type=single-node
-      - http.cors.allow-origin=*
-      - http.cors.enabled=true
-      - http.cors.allow-headers=X-Requested-With,X-Auth-Token,Content-Type,Content-Length,Authorization
-      - http.cors.allow-credentials=true
-    volumes:
-      - ./.docker/elastic-data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:7.17.1
-    container_name: "omnivore-kibana"
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elastic:9200
-    depends_on:
-      - elastic
-    ports:
-      - "5601:5601"
-    profiles:
-      - debug
-
-  redis:
-    image: "redis:6.2.7"
-    container_name: "omnivore-redis"
-    healthcheck:
-      test: "exit 0"
-      interval: 2s
-      timeout: 12s
-      retries: 3
-    ports:
-      - "6379:6379"
 
   api:
     build:
@@ -98,23 +92,17 @@ services:
       - PG_DB=omnivore
       - PG_PORT=5432
       - PG_POOL_MAX=20
-      - ELASTIC_URL=http://elastic:9200
       - JAEGER_HOST=jaeger
-      - IMAGE_PROXY_URL=http://localhost:9999
       - IMAGE_PROXY_SECRET=some-secret
       - JWT_SECRET=some_secret
       - SSO_JWT_SECRET=some_sso_secret
       - CLIENT_URL=http://localhost:3000
       - GATEWAY_URL=http://localhost:8080/api
       - CONTENT_FETCH_URL=http://content-fetch:8080/?token=some_token
-      - REMINDER_TASK_HANDLER_URL=/svc/reminders/trigger
+      - REDIS_URL='redis://redis:6379'
     depends_on:
       migrate:
         condition: service_completed_successfully
-      elastic:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   web:
     build:
@@ -148,19 +136,17 @@ services:
       - JWT_SECRET=some_secret
       - VERIFICATION_TOKEN=some_token
       - REST_BACKEND_ENDPOINT=http://api:8080/api
+      - REDIS_URL=redis://redis:6379
     depends_on:
+      redis:
+        condition: service_healthy
       api:
         condition: service_healthy
 
-  rule-handler:
-    build:
-      context: .
-      dockerfile: ./packages/rule-handler/Dockerfile
-    container_name: "omnivore-rule-handler"
+  redis:
+    image: "redis:7.2.4"
+    container_name: "omnivore-redis"
     ports:
-      - "9091:8080"
-    environment:
-      - PUBSUB_VERIFICATION_TOKEN=some_token
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]

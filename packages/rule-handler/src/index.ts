@@ -1,13 +1,18 @@
 import * as Sentry from '@sentry/serverless'
-import express, { Request, Response } from 'express'
 import * as dotenv from 'dotenv'
-import { getEnabledRules, triggerActions } from './rule'
-import { promisify } from 'util'
+import express, { Request, Response } from 'express'
 import * as jwt from 'jsonwebtoken'
+import { promisify } from 'util'
+import { getEnabledRules, RuleEventType, triggerActions } from './rule'
 
 const signToken = promisify(jwt.sign)
 
 dotenv.config()
+
+Sentry.GCPFunction.init({
+  dsn: process.env.SENTRY_DSN,
+  tracesSampleRate: 0,
+})
 
 interface PubSubRequestMessage {
   data: string
@@ -76,6 +81,10 @@ export const getAuthToken = async (
   return auth as string
 }
 
+const ruleEventType = (eventType: string) => {
+  return `PAGE_${eventType.toUpperCase()}` as RuleEventType
+}
+
 export const ruleHandler = Sentry.GCPFunction.wrapHttpFunction(
   async (req: Request, res: Response) => {
     const apiEndpoint = process.env.REST_BACKEND_ENDPOINT
@@ -134,7 +143,7 @@ export const ruleHandler = Sentry.GCPFunction.wrapHttpFunction(
         data,
         apiEndpoint,
         jwtSecret,
-        eventType
+        ruleEventType(eventType)
       )
       if (triggeredActions.length === 0) {
         console.log('No actions triggered')

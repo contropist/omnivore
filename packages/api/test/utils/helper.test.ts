@@ -1,6 +1,5 @@
-import 'mocha'
 import { expect } from 'chai'
-import 'chai/register-should'
+import 'mocha'
 import { validatedDate } from '../../src/utils/helpers'
 
 describe('validatedDate', () => {

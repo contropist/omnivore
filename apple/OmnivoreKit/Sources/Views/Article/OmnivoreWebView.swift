@@ -1,6 +1,7 @@
 import Models
 import Utils
 import WebKit
+
 // swiftlint:disable file_length
 
 /// Describes actions that can be sent from the WebView back to native views.
@@ -22,8 +23,11 @@ public final class OmnivoreWebView: WKWebView {
   #endif
 
   public var tapHandler: (() -> Void)?
+  public var explainHandler: ((String) -> Void)?
 
   private var currentMenu: ContextMenu = .defaultMenu
+
+  private var explainEnabled = false
 
   override init(frame: CGRect, configuration: WKWebViewConfiguration) {
     super.init(frame: frame, configuration: configuration)
@@ -46,7 +50,7 @@ public final class OmnivoreWebView: WKWebView {
     do {
       try dispatchEvent(.updateTheme(themeName: ThemeManager.currentTheme.themeKey))
     } catch {
-      showErrorInSnackbar("Error updating theme")
+      showInReaderSnackbar("Error updating theme")
     }
   }
 
@@ -56,7 +60,7 @@ public final class OmnivoreWebView: WKWebView {
         try dispatchEvent(.updateFontFamily(family: fontFamily))
       }
     } catch {
-      showErrorInSnackbar("Error updating font")
+      showInReaderSnackbar("Error updating font")
     }
   }
 
@@ -66,7 +70,7 @@ public final class OmnivoreWebView: WKWebView {
         try dispatchEvent(.updateFontSize(size: fontSize))
       }
     } catch {
-      showErrorInSnackbar("Error updating font")
+      showInReaderSnackbar("Error updating font")
     }
   }
 
@@ -77,7 +81,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.updateMaxWidthPercentage(maxWidthPercentage: maxWidthPercentage))
       } catch {
-        showErrorInSnackbar("Error updating max width")
+        showInReaderSnackbar("Error updating max width")
       }
     }
   }
@@ -87,7 +91,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.updateLineHeight(height: height))
       } catch {
-        showErrorInSnackbar("Error updating line height")
+        showInReaderSnackbar("Error updating line height")
       }
     }
   }
@@ -101,7 +105,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.handleFontContrastChange(isHighContrast: isHighContrast))
       } catch {
-        showErrorInSnackbar("Error updating text contrast")
+        showInReaderSnackbar("Error updating text contrast")
       }
     }
   }
@@ -115,7 +119,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.handleAutoHighlightModeChange(isEnabled: isEnabled))
       } catch {
-        showErrorInSnackbar("Error updating text contrast")
+        showInReaderSnackbar("Error updating text contrast")
       }
     }
   }
@@ -126,7 +130,7 @@ public final class OmnivoreWebView: WKWebView {
         try dispatchEvent(.updateJustifyText(justify: justify))
       }
     } catch {
-      showErrorInSnackbar("Error updating justify-text")
+      showInReaderSnackbar("Error updating justify-text")
     }
   }
 
@@ -134,7 +138,7 @@ public final class OmnivoreWebView: WKWebView {
     do {
       try dispatchEvent(.updateTitle(title: title))
     } catch {
-      showErrorInSnackbar("Error updating title")
+      showInReaderSnackbar("Error updating title")
     }
   }
 
@@ -142,7 +146,7 @@ public final class OmnivoreWebView: WKWebView {
     do {
       try dispatchEvent(.updateLabels(labels: labelsJSON))
     } catch {
-      showErrorInSnackbar("Error updating labels")
+      showInReaderSnackbar("Error updating labels")
     }
   }
 
@@ -150,7 +154,7 @@ public final class OmnivoreWebView: WKWebView {
     do {
       try dispatchEvent(.share)
     } catch {
-      showErrorInSnackbar("Error updating line height")
+      showInReaderSnackbar("Error updating line height")
     }
   }
 
@@ -179,7 +183,7 @@ public final class OmnivoreWebView: WKWebView {
           try dispatchEvent(.updateTheme(themeName: ThemeManager.currentTheme.themeKey))
         }
       } catch {
-        showErrorInSnackbar("Error updating theme due to colormode change")
+        showInReaderSnackbar("Error updating theme due to colormode change")
       }
     }
 
@@ -191,6 +195,14 @@ public final class OmnivoreWebView: WKWebView {
       }
     }
   #endif
+  
+  // Because all the snackbar stuff lives in app we just use notifications here
+  func showInReaderSnackbar(_ message: String) {
+    NotificationCenter.default.post(name: Notification.Name("SnackBar"),
+                                    object: nil,
+                                    userInfo: ["message": message,
+                                               "dismissAfter": 2000 as Any])
+  }
 }
 
 #if os(iOS)
@@ -289,10 +301,17 @@ public final class OmnivoreWebView: WKWebView {
       case #selector(removeSelection): return true
       case #selector(copy(_:)): return true
       case #selector(setLabels(_:)): return true
+      case #selector(explainSelection): return true
+
       case Selector(("_lookup:")): return (currentMenu == .defaultMenu)
       case Selector(("_define:")): return (currentMenu == .defaultMenu)
       case Selector(("_translate:")): return (currentMenu == .defaultMenu)
       case Selector(("_findSelected:")): return (currentMenu == .defaultMenu)
+
+      case Selector(("lookup:")): return (currentMenu == .defaultMenu)
+      case Selector(("define:")): return (currentMenu == .defaultMenu)
+      case Selector(("translate:")): return (currentMenu == .defaultMenu)
+      case Selector(("findSelected:")): return (currentMenu == .defaultMenu)
       default: return false
       }
     }
@@ -305,7 +324,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.annotate)
       } catch {
-        showErrorInSnackbar("Error creating highlight")
+        showInReaderSnackbar("Error creating highlight")
       }
       hideMenu()
     }
@@ -314,16 +333,27 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.highlight)
       } catch {
-        showErrorInSnackbar("Error creating highlight")
+        showInReaderSnackbar("Error creating highlight")
       }
       hideMenu()
+    }
+
+    @objc private func explainSelection() {
+      Task {
+        let selection = try? await self.evaluateJavaScript("window.getSelection().toString()")
+        if let selection = selection as? String, let explainHandler = explainHandler {
+          explainHandler(selection)
+        } else {
+          showInReaderSnackbar("Error getting text to explain")
+        }
+      }
     }
 
     @objc private func shareSelection() {
       do {
         try dispatchEvent(.share)
       } catch {
-        showErrorInSnackbar("Error sharing highlight")
+        showInReaderSnackbar("Error sharing highlight")
       }
       hideMenu()
     }
@@ -332,7 +362,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.remove)
       } catch {
-        showErrorInSnackbar("Error deleting highlight")
+        showInReaderSnackbar("Error deleting highlight")
       }
       hideMenu()
     }
@@ -342,7 +372,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.copyHighlight)
       } catch {
-        showErrorInSnackbar("Error copying highlight")
+        showInReaderSnackbar("Error copying highlight")
       }
       hideMenu()
     }
@@ -351,7 +381,7 @@ public final class OmnivoreWebView: WKWebView {
       do {
         try dispatchEvent(.setHighlightLabels)
       } catch {
-        showErrorInSnackbar("Error setting labels for highlight")
+        showInReaderSnackbar("Error setting labels for highlight")
       }
       hideMenu()
     }
@@ -362,8 +392,21 @@ public final class OmnivoreWebView: WKWebView {
 
         let items: [UIMenuElement]
         if currentMenu == .defaultMenu {
+          let autoHighlightEnabled = UserDefaults.standard.value(forKey: UserDefaultKey.enableHighlightOnRelease.rawValue)
+          if let autoHighlightEnabled = autoHighlightEnabled as? Bool, autoHighlightEnabled  {
+            builder.remove(menu: .standardEdit)
+            builder.remove(menu: .lookup)
+            builder.remove(menu: .find)
+            super.buildMenu(with: builder)
+            return
+          }
           let highlight = UICommand(title: LocalText.genericHighlight, action: #selector(highlightSelection))
-          items = [highlight, annotate]
+          if explainHandler != nil {
+            let explain = UICommand(title: "Explain", action: #selector(explainSelection))
+            items = [highlight, explain, annotate]
+          } else {
+            items = [highlight, annotate]
+          }
         } else {
           let remove = UICommand(title: "Remove", action: #selector(removeSelection))
           let setLabels = UICommand(title: LocalText.labelsGeneric, action: #selector(setLabels))
@@ -371,7 +414,7 @@ public final class OmnivoreWebView: WKWebView {
         }
 
         let omnivore = UIMenu(title: "", options: .displayInline, children: items)
-        builder.insertSibling(omnivore, beforeMenu: .lookup)
+        builder.insertSibling(omnivore, afterMenu: .standardEdit)
       }
 
       super.buildMenu(with: builder)

@@ -3,16 +3,20 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import * as jwt from 'jsonwebtoken'
 import jwksClient from 'jwks-rsa'
+import { StatusType } from '../../entity/user'
+import { env, homePageURL } from '../../env'
+import { LoginErrorCode } from '../../generated/graphql'
+import { userRepository } from '../../repository/user'
+import { analytics } from '../../utils/analytics'
+import { logger } from '../../utils/logger'
+import { createSsoToken, ssoRedirectURL } from '../../utils/sso'
 import { DecodeTokenResult } from './auth_types'
 import {
-  createWebAuthToken,
   createPendingUserToken,
+  createWebAuthToken,
   suggestedUsername,
 } from './jwt_helpers'
-import { env, homePageURL } from '../../env'
-import UserModel from '../../datalayer/user'
-import { LoginErrorCode } from '../../generated/graphql'
-import { createSsoToken, ssoRedirectURL } from '../../utils/sso'
+import { DEFAULT_HOME_PATH } from '../../utils/navigation'
 
 const appleBaseURL = 'https://appleid.apple.com'
 const audienceName = 'app.omnivore.app'
@@ -27,7 +31,7 @@ async function fetchApplePublicKey(kid: string): Promise<string | null> {
   try {
     const key: jwksClient.SigningKey = await new Promise((resolve, reject) => {
       client.getSigningKey(kid, (error, result) => {
-        if (error) {
+        if (error || result === undefined) {
           return reject(error)
         }
         return resolve(result)
@@ -35,7 +39,7 @@ async function fetchApplePublicKey(kid: string): Promise<string | null> {
     })
     return key.getPublicKey()
   } catch (e) {
-    console.log('fetchApplePublicKey error', e)
+    logger.error('fetchApplePublicKey error', e)
     return null
   }
 }
@@ -67,7 +71,7 @@ export async function decodeAppleToken(
       }
     }
   } catch (e) {
-    console.log('decodeAppleToken error', e)
+    logger.error('decodeAppleToken error', e)
     return { errorCode: 500 }
   }
 }
@@ -117,10 +121,10 @@ export async function handleAppleWebAuth(
   }
 
   try {
-    const model = new UserModel()
-    const user = await model.getWhere({
+    const user = await userRepository.findOneBy({
       sourceUserId: decodedTokenResult.sourceUserId,
       source: 'APPLE',
+      status: StatusType.Active,
     })
     const userId = user?.id
 
@@ -139,10 +143,24 @@ export async function handleAppleWebAuth(
 
     const authToken = await createWebAuthToken(userId)
     if (authToken) {
-      const ssoToken = createSsoToken(authToken, `${baseURL()}/home`)
+      const ssoToken = createSsoToken(
+        authToken,
+        `${baseURL()}${DEFAULT_HOME_PATH}`
+      )
       const redirectURL = isVercel
         ? ssoRedirectURL(ssoToken)
-        : `${baseURL()}/home`
+        : `${baseURL()}${DEFAULT_HOME_PATH}`
+
+      analytics.capture({
+        distinctId: user.id,
+        event: 'login',
+        properties: {
+          method: 'apple',
+          email: user.email,
+          username: user.profile.username,
+          env: env.server.apiEnv,
+        },
+      })
 
       return {
         authToken,
@@ -152,7 +170,7 @@ export async function handleAppleWebAuth(
       return { redirectURL: authFailedRedirect }
     }
   } catch (e) {
-    console.log('handleAppleWebAuth error', e)
+    logger.info('handleAppleWebAuth error', e)
     return { redirectURL: authFailedRedirect }
   }
 }

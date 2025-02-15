@@ -1,19 +1,17 @@
-import {
-  ArchiveBox,
-  DotsThreeOutline,
-  Info,
-  TagSimple,
-  TextAa,
-  Trash,
-  Tray,
-  Notebook,
-} from 'phosphor-react'
-import { ArticleAttributes } from '../../../lib/networking/queries/useGetArticleQuery'
+import { ArticleAttributes } from '../../../lib/networking/library_items/useLibraryItems'
 import { Button } from '../../elements/Button'
 import { HStack } from '../../elements/LayoutPrimitives'
-import { TooltipWrapped } from '../../elements/Tooltip'
 import { theme } from '../../tokens/stitches.config'
 import { ReaderDropdownMenu } from '../../patterns/ReaderDropdownMenu'
+import { ArchiveIcon } from '../../elements/icons/ArchiveIcon'
+import { NotebookIcon } from '../../elements/icons/NotebookIcon'
+import { TrashIcon } from '../../elements/icons/TrashIcon'
+import { LabelIcon } from '../../elements/icons/LabelIcon'
+import { EditInfoIcon } from '../../elements/icons/EditInfoIcon'
+import { ReaderSettingsIcon } from '../../elements/icons/ReaderSettingsIcon'
+import { CircleUtilityMenuIcon } from '../../elements/icons/CircleUtilityMenuIcon'
+import { UnarchiveIcon } from '../../elements/icons/UnarchiveIcon'
+import { State } from '../../../lib/networking/fragments/articleFragment'
 
 export type ArticleActionsMenuLayout = 'top' | 'side'
 
@@ -38,55 +36,58 @@ export function VerticalArticleActionsMenu(
         }}
       >
         <Button
-          style="articleActionIcon"
-          onClick={() => props.articleActionHandler('setLabels')}
-          css={{
-            display: 'flex',
-            alignItems: 'center',
-          }}
-        >
-          <TagSimple size={24} color={theme.colors.thHighContrast.toString()} />
-        </Button>
-
-        <Button
+          title="Open notebook (t)"
           style="articleActionIcon"
           onClick={() => props.articleActionHandler('showHighlights')}
           css={{
-            display: 'flex',
+            display: 'none',
             alignItems: 'center',
-          }}
-        >
-          <TooltipWrapped
-            tooltipContent="Open Notebook (t)"
-            tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-          >
-            <Notebook
-              size={24}
-              color={theme.colors.thHighContrast.toString()}
-            />
-          </TooltipWrapped>
-        </Button>
-
-        <Button
-          style="articleActionIcon"
-          onClick={() => props.articleActionHandler('showEditModal')}
-          css={{
-            display: 'flex',
-            alignItems: 'center',
-            '@mdDown': {
-              display: 'none',
+            '@media (min-width: 500px)': {
+              display: 'flex',
             },
           }}
         >
-          <TooltipWrapped
-            tooltipContent="Edit Info (i)"
-            tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-          >
-            <Info size={24} color={theme.colors.thHighContrast.toString()} />
-          </TooltipWrapped>
+          <NotebookIcon
+            size={24}
+            color={theme.colors.thHighContrast.toString()}
+          />
         </Button>
 
         <Button
+          title="Edit info (i)"
+          style="articleActionIcon"
+          onClick={() => props.articleActionHandler('showEditModal')}
+          css={{
+            display: 'none',
+            alignItems: 'center',
+            '@media (min-width: 420px)': {
+              display: 'flex',
+            },
+          }}
+        >
+          <EditInfoIcon
+            size={24}
+            color={theme.colors.thHighContrast.toString()}
+          />
+        </Button>
+
+        <Button
+          title="Edit labels (l)"
+          style="articleActionIcon"
+          onClick={() => props.articleActionHandler('setLabels')}
+          css={{
+            display: 'none',
+            alignItems: 'center',
+            '@media (min-width: 400px)': {
+              display: 'flex',
+            },
+          }}
+        >
+          <LabelIcon size={24} color={theme.colors.thHighContrast.toString()} />
+        </Button>
+
+        <Button
+          title="Remove (#)"
           style="articleActionIcon"
           onClick={() => {
             props.articleActionHandler('delete')
@@ -94,21 +95,14 @@ export function VerticalArticleActionsMenu(
           css={{
             display: 'flex',
             alignItems: 'center',
-            '@mdDown': {
-              display: 'none',
-            },
           }}
         >
-          <TooltipWrapped
-            tooltipContent="Remove (#)"
-            tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-          >
-            <Trash size={24} color={theme.colors.thHighContrast.toString()} />
-          </TooltipWrapped>
+          <TrashIcon size={24} color={theme.colors.thHighContrast.toString()} />
         </Button>
 
-        {!props.article?.isArchived ? (
+        {props.article?.state !== State.ARCHIVED ? (
           <Button
+            title="Archive (e)"
             style="articleActionIcon"
             onClick={() => props.articleActionHandler('archive')}
             css={{
@@ -116,18 +110,14 @@ export function VerticalArticleActionsMenu(
               alignItems: 'center',
             }}
           >
-            <TooltipWrapped
-              tooltipContent="Archive (e)"
-              tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-            >
-              <ArchiveBox
-                size={24}
-                color={theme.colors.thHighContrast.toString()}
-              />
-            </TooltipWrapped>
+            <ArchiveIcon
+              size={24}
+              color={theme.colors.thHighContrast.toString()}
+            />
           </Button>
         ) : (
           <Button
+            title="Unarchive (e)"
             style="articleActionIcon"
             onClick={() => props.articleActionHandler('unarchive')}
             css={{
@@ -135,15 +125,14 @@ export function VerticalArticleActionsMenu(
               alignItems: 'center',
             }}
           >
-            <TooltipWrapped
-              tooltipContent="Unarchive (e)"
-              tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-            >
-              <Tray size={24} color={theme.colors.thHighContrast.toString()} />
-            </TooltipWrapped>
+            <UnarchiveIcon
+              size={24}
+              color={theme.colors.thHighContrast.toString()}
+            />
           </Button>
         )}
         <Button
+          title="Display settings (d)"
           style="articleActionIcon"
           onClick={() => props.articleActionHandler('editDisplaySettings')}
           css={{
@@ -151,17 +140,16 @@ export function VerticalArticleActionsMenu(
             alignItems: 'center',
           }}
         >
-          <TooltipWrapped
-            tooltipContent="Edit Info (i)"
-            tooltipSide={props.layout == 'side' ? 'right' : 'bottom'}
-          >
-            <TextAa size={24} color={theme.colors.thHighContrast.toString()} />
-          </TooltipWrapped>
+          <ReaderSettingsIcon
+            size={24}
+            color={theme.colors.thHighContrast.toString()}
+          />
         </Button>
 
         <ReaderDropdownMenu
+          libraryItem={props.article}
           triggerElement={
-            <DotsThreeOutline
+            <CircleUtilityMenuIcon
               size={24}
               color={theme.colors.thHighContrast.toString()}
             />

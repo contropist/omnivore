@@ -1,6 +1,7 @@
 /* global
   browserApi
   showToolbar
+  showConsentError
   prepareContent
   getPageInfo
   ACTIONS
@@ -23,7 +24,8 @@
   browserApi.runtime.onMessage.addListener(
     ({ action, payload }, sender, sendResponse) => {
       if (action === ACTIONS.GetContent) {
-        prepareContent().then((pageContent) => {
+        const createHighlight = payload && payload.createHighlight
+        prepareContent(createHighlight).then((pageContent) => {
           sendResponse({
             type: pageContent.type,
             doc: pageContent.content || '',
@@ -40,6 +42,8 @@
         sendResponse({ pong: true })
       } else if (action === ACTIONS.ShowToolbar) {
         showToolbar(payload)
+      } else if (action === ACTIONS.ShowConsentError) {
+        showConsentError()
       } else if (action === ACTIONS.UpdateStatus) {
         updateStatus(payload)
       } else if (action === ACTIONS.LabelCacheUpdated) {

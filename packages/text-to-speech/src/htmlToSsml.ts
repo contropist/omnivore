@@ -5,6 +5,7 @@ import {
   SentenceTokenizerNew,
   WordPunctTokenizer,
 } from 'natural'
+import { isElement } from 'underscore'
 
 // this code needs to be kept in sync with the
 // frontend code in: useReadingProgressAnchor
@@ -49,6 +50,7 @@ const DEFAULT_LANGUAGE = 'en-US'
 const DEFAULT_VOICE = 'en-US-JennyNeural'
 const DEFAULT_SECONDARY_VOICE = 'en-US-GuyNeural'
 const DEFAULT_RATE = '1.1'
+const ELEMENT_INDEX_ATTRIBUTE = 'data-omnivore-anchor-idx'
 
 const ANCHOR_ELEMENTS_BLOCKED_ATTRIBUTES = [
   'omnivore-highlight-id',
@@ -73,6 +75,19 @@ const TOP_LEVEL_TAGS = [
   'H6',
   'LI',
 ]
+
+const SKIP_TAGS = [
+  'SCRIPT',
+  'STYLE',
+  'IMG',
+  'FIGURE',
+  'FIGCAPTION',
+  'IFRAME',
+  'CODE',
+]
+
+const getAnchorIndex = (element: Element): number =>
+  Number(element.getAttribute(ELEMENT_INDEX_ATTRIBUTE))
 
 function parseDomTree(pageNode: Element) {
   if (!pageNode || pageNode.childNodes.length == 0) {
@@ -108,7 +123,7 @@ function parseDomTree(pageNode: Element) {
   visitedNodeList.forEach((node, index) => {
     // We start at index 3, because the frontend starts two nodes above us
     // on the #readability-page-1 element that wraps the entire content.
-    node.setAttribute('data-omnivore-anchor-idx', (index + 3).toString())
+    node.setAttribute(ELEMENT_INDEX_ATTRIBUTE, (index + 3).toString())
   })
   return visitedNodeList
 }
@@ -146,18 +161,8 @@ function emitElement(
   element: Element,
   isTopLevel: boolean
 ) {
-  const SKIP_TAGS = [
-    'SCRIPT',
-    'STYLE',
-    'IMG',
-    'FIGURE',
-    'FIGCAPTION',
-    'IFRAME',
-    'CODE',
-  ]
-
   const topLevelTags = ssmlTagsForTopLevelElement()
-  const idx = element.getAttribute('data-omnivore-anchor-idx')
+  const idx = getAnchorIndex(element)
   let maxVisitedIdx = Number(idx)
 
   if (isTopLevel) {
@@ -166,6 +171,11 @@ function emitElement(
 
   for (const child of Array.from(element.childNodes)) {
     if (SKIP_TAGS.indexOf(child.nodeName) >= 0) {
+      // Skip unwanted tags and update the index
+      if (isElement(child)) {
+        const childIdx = getAnchorIndex(child)
+        maxVisitedIdx = Math.max(maxVisitedIdx, childIdx)
+      }
       continue
     }
 
@@ -180,8 +190,8 @@ function emitElement(
       }
       emitTextNode(textItems, cleanedText, child)
     }
-    if (child.nodeType == 1 /* Node.ELEMENT_NODE */) {
-      maxVisitedIdx = emitElement(textItems, child as HTMLElement, false)
+    if (isElement(child)) {
+      maxVisitedIdx = emitElement(textItems, child, false)
       if (child.nodeName === 'LI') {
         // add a new line after each list item
         emit(textItems, '\n')
@@ -265,6 +275,11 @@ export const stripEmojis = (text: string): string => {
   return text.replace(emojiRegex, '').replace(/\s+/g, ' ')
 }
 
+const filterUtterances = (utterances: Utterance[]): Utterance[] => {
+  const punctuationOrSpaceOnly = /^[\s.,;:!?]+$/
+  return utterances.filter((u) => !punctuationOrSpaceOnly.test(u.text))
+}
+
 const textToUtterances = ({
   wordTokenizer,
   idx,
@@ -288,7 +303,7 @@ const textToUtterances = ({
         idx,
         text,
         wordOffset,
-        wordCount: wordTokenizer.tokenize(text).length,
+        wordCount: wordTokenizer.tokenize(text)?.length ?? 0,
         voice,
       },
     ]
@@ -298,14 +313,9 @@ const textToUtterances = ({
   try {
     text = htmlToText(text, { wordwrap: false })
   } catch (err) {
-    console.error(
-      'Unable to convert HTML to text, html:',
-      text,
-      ', error:',
-      err
-    )
+    console.error('Unable to convert HTML to text')
     text = parseHTML(text).document.documentElement.textContent ?? text
-    console.info('Converted HTML to text:', text)
+    console.info('Converted HTML to text')
   }
   const MAX_CHARS = 256
   let sentences: string[] = []
@@ -314,7 +324,10 @@ const textToUtterances = ({
     const sentenceTokenizer = new SentenceTokenizerNew()
     sentences = sentenceTokenizer.tokenize(text)
   } catch (err) {
-    console.debug('Unable to tokenize sentences, text:', text, ', error:', err)
+    console.log(
+      'Unable to tokenize sentences, falling back to old tokenizer',
+      text
+    )
     // fallback to old sentence tokenizer
     const sentenceTokenizer = new SentenceTokenizer()
     sentences = sentenceTokenizer.tokenize(text)
@@ -331,7 +344,7 @@ const textToUtterances = ({
     const nextText = currentText + sentence
     if (nextText.length > MAX_CHARS) {
       if (currentText.length > 0) {
-        const wordCount = wordTokenizer.tokenize(currentText).length
+        const wordCount = wordTokenizer.tokenize(currentText)?.length ?? 0
         utterances.push({
           idx,
           text: currentText,
@@ -342,7 +355,7 @@ const textToUtterances = ({
         wordOffset += wordCount
         currentText = sentence
       } else {
-        const wordCount = wordTokenizer.tokenize(sentence).length
+        const wordCount = wordTokenizer.tokenize(sentence)?.length ?? 0
         utterances.push({
           idx,
           text: sentence,
@@ -360,7 +373,7 @@ const textToUtterances = ({
         idx,
         text: currentText,
         wordOffset,
-        wordCount: wordTokenizer.tokenize(currentText).length,
+        wordCount: wordTokenizer.tokenize(currentText)?.length ?? 0,
         voice,
       })
     }
@@ -369,13 +382,31 @@ const textToUtterances = ({
   return utterances
 }
 
+const replaceSmartQuotes = (text: string): string => {
+  // replace smart quotes with regular quotes
+  return text.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"')
+}
+
+// get the max idx of the element and its children
+const getMaxVisitedIdx = (element: Element): number => {
+  let maxVisitedIdx = getAnchorIndex(element)
+  for (const child of Array.from(element.childNodes)) {
+    if (isElement(child)) {
+      maxVisitedIdx = Math.max(maxVisitedIdx, getMaxVisitedIdx(child))
+    }
+  }
+
+  return maxVisitedIdx
+}
+
 export const htmlToSpeechFile = (htmlInput: HtmlInput): SpeechFile => {
   const { title, content, options } = htmlInput
   console.log('creating speech file with options:', options)
   const language = options.language || DEFAULT_LANGUAGE
   const defaultVoice = options.primaryVoice || DEFAULT_VOICE
 
-  const dom = parseHTML(content)
+  // replace smart quotes with regular quotes to avoid issues with tokenization
+  const dom = parseHTML(replaceSmartQuotes(content))
   const body = dom.document.querySelector('#readability-page-1')
   if (!body) {
     console.log('No HTML body found')
@@ -420,6 +451,12 @@ export const htmlToSpeechFile = (htmlInput: HtmlInput): SpeechFile => {
     const textItems: string[] = []
     const node = parsedNodes[i - 3]
 
+    // skip unwanted tags and update the index
+    if (SKIP_TAGS.includes(node.nodeName)) {
+      i = getMaxVisitedIdx(node)
+      continue
+    }
+
     if (TOP_LEVEL_TAGS.includes(node.nodeName) || hasSignificantText(node)) {
       // use paragraph as anchor
       const idx = i.toString()
@@ -440,10 +477,12 @@ export const htmlToSpeechFile = (htmlInput: HtmlInput): SpeechFile => {
     }
   }
 
+  const filteredUtterances = filterUtterances(utterances)
+
   return {
     wordCount: wordOffset,
     language,
     defaultVoice,
-    utterances,
+    utterances: filteredUtterances,
   }
 }

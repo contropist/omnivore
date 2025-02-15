@@ -1,3 +1,4 @@
+import { unstable_getImgProps as getImgProps } from 'next/image'
 import {
   Box,
   HStack,
@@ -7,7 +8,8 @@ import {
 import { LoginForm } from './LoginForm'
 import type { LoginFormProps } from './LoginForm'
 import { OmnivoreNameLogo } from '../elements/images/OmnivoreNameLogo'
-import { theme } from '../tokens/stitches.config'
+
+import featureFullWidthImage from '../../public/static/images/login/login-feature-image-full.png'
 
 export function LoginLayout(props: LoginFormProps): JSX.Element {
   return (
@@ -33,10 +35,7 @@ export function LoginLayout(props: LoginFormProps): JSX.Element {
           width: '100%',
         }}
       >
-        <OmnivoreNameLogo
-          color={theme.colors.omnivoreGray.toString()}
-          href="/login"
-        />
+        <OmnivoreNameLogo color="#898989" href="/login" />
       </Box>
     </>
   )
@@ -49,9 +48,10 @@ function MobileLoginLayout(props: LoginFormProps) {
         alignment="center"
         distribution="center"
         css={{
-          bg: '$omnivoreYellow',
           width: '100%',
           flexGrow: 1,
+          color: '#898989',
+          background: '#2A2A2A',
         }}
       >
         <LoginForm {...props} />
@@ -68,8 +68,9 @@ function MediumLoginLayout(props: LoginFormProps) {
       css={{
         width: '100vw',
         height: '100vh',
-        bg: '$omnivoreYellow',
         overflowY: 'clip',
+        color: '#898989',
+        background: '#2A2A2A',
       }}
     >
       <Box
@@ -86,7 +87,25 @@ function MediumLoginLayout(props: LoginFormProps) {
   )
 }
 
+const srcSetToImageSet = (srcFallback: string, srcSet?: string): string => {
+  if (!srcSet) return `url(${srcFallback})`
+
+  return `image-set( ${srcSet
+    .split(', ')
+    .map((subSrc) => {
+      const [src, resolution] = subSrc.split(' ')
+      return `url("${decodeURIComponent(src)}") ${resolution}`
+    })
+    .join(',')}
+)`
+}
+
 function OmnivoreIllustration() {
+  const { props: fullWidthImgProps } = getImgProps({
+    src: featureFullWidthImage,
+    alt: '',
+  })
+
   return (
     <Box
       css={{
@@ -95,14 +114,11 @@ function OmnivoreIllustration() {
         marginLeft: 'auto',
         backgroundSize: 'cover',
         backgroundRepeat: 'no-repeat',
-        backgroundImage: `-webkit-image-set(
-          url('/static/images/landingPage-feature@1x.png') 1x,
-          url('/static/landing/landingPage-feature@2x.png') 2x
-        )`,
-        'background-image': `image-set(
-          url('/static/images/landingPage-feature@1x.png') 1x,
-          url('/static/landing/landingPage-feature@2x.png') 2x
-        )`,
+        backgroundPosition: 'left',
+        backgroundImage: srcSetToImageSet(
+          fullWidthImgProps.src,
+          fullWidthImgProps.srcSet
+        ),
       }}
     />
   )

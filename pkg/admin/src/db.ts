@@ -44,10 +44,19 @@ export const registerDatabase = async (secrets: any): Promise<Connection> => {
       AdminUser,
       User,
       UserProfile,
-      UserArticle,
       ReceivedEmail,
       ContentDisplayReport,
       Group,
+      Integration,
+      Subscription,
+      LibraryItem,
+      UploadFile,
+      Recommendation,
+      GroupMembership,
+      Features,
+      EmailAddress,
+      Rule,
+      Export,
     ],
   })
 
@@ -63,6 +72,15 @@ export enum AuthProvider {
   Apple = 'APPLE',
   Google = 'GOOGLE',
   Email = 'EMAIL',
+}
+
+export enum LibraryItemState {
+  Failed = 'FAILED',
+  Processing = 'PROCESSING',
+  Succeeded = 'SUCCEEDED',
+  Deleted = 'DELETED',
+  Archived = 'ARCHIVED',
+  ContentNotFetched = 'CONTENT_NOT_FETCHED',
 }
 
 @Entity({ name: 'admin_user' })
@@ -97,9 +115,6 @@ export class User extends BaseEntity {
   @Column({ type: 'enum', enum: StatusType })
   status!: StatusType
 
-  @OneToMany(() => UserArticle, (ua) => ua.user)
-  articles!: UserArticle[]
-
   @Column({ type: 'text' })
   source_user_id!: string
 
@@ -116,33 +131,8 @@ export class UserProfile extends BaseEntity {
   public username!: string
 
   @JoinColumn({ name: 'user_id' })
-  @ManyToOne(() => User, (user) => user.articles, { eager: true })
+  @ManyToOne(() => User, { eager: true })
   user!: User
-}
-
-@Entity({ name: 'user_articles' })
-export class UserArticle extends BaseEntity {
-  @PrimaryGeneratedColumn('uuid')
-  id!: string
-
-  @JoinColumn({ name: 'user_id' })
-  @ManyToOne(() => User, (user) => user.articles, { eager: true })
-  user!: User
-
-  @Column({ type: 'text', name: 'article_id' })
-  articleId!: string
-
-  @Column({ type: 'text' })
-  slug!: string
-
-  @Column({ type: 'timestamp', name: 'created_at' })
-  createdAt!: Date
-
-  @Column({ type: 'timestamp', name: 'updated_at' })
-  updatedAt!: Date
-
-  @Column({ type: 'timestamp', name: 'saved_at' })
-  savedAt!: Date
 }
 
 @Entity({ name: 'content_display_report' })
@@ -151,7 +141,7 @@ export class ContentDisplayReport extends BaseEntity {
   id!: string
 
   @JoinColumn({ name: 'user_id' })
-  @ManyToOne(() => User, (user) => user.articles, { eager: true })
+  @ManyToOne(() => User, { eager: true })
   user!: User
 
   @Column({ type: 'text', name: 'original_url' })
@@ -173,7 +163,7 @@ export class ReceivedEmail extends BaseEntity {
   id!: string
 
   @JoinColumn({ name: 'user_id' })
-  @ManyToOne(() => User, (user) => user.articles, { eager: true })
+  @ManyToOne(() => User, { eager: true })
   user!: User
 
   @Column('text')
@@ -210,7 +200,7 @@ export class Group extends BaseEntity {
   name!: string
 
   @OneToOne(() => User)
-  @JoinColumn({ name: 'created_at' })
+  @JoinColumn({ name: 'created_by_id' })
   createdBy!: User
 
   @Column({ type: 'timestamp', name: 'created_at' })
@@ -230,4 +220,318 @@ export class Group extends BaseEntity {
 
   @Column('boolean', { default: false, name: 'only_admin_can_see_members' })
   onlyAdminCanSeeMembers!: boolean
+}
+
+@Entity({ name: 'integrations' })
+export class Integration extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User, { eager: true })
+  user!: User
+
+  @Column('varchar', { length: 40 })
+  name!: string
+
+  @Column('varchar', { length: 255 })
+  token!: string
+
+  @Column('boolean', { default: true })
+  enabled!: boolean
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+
+  @Column({ name: 'synced_at', type: 'timestamp', nullable: true })
+  syncedAt?: Date | null
+}
+
+enum SubscriptionStatus {
+  Active = 'ACTIVE',
+  Deleted = 'DELETED',
+  Unsubscribed = 'UNSUBSCRIBED',
+}
+
+enum SubscriptionType {
+  Newsletter = 'NEWSLETTER',
+  Rss = 'RSS',
+}
+
+@Entity({ name: 'subscriptions' })
+export class Subscription extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User, { eager: true })
+  user!: User
+
+  @Column('text')
+  name!: string
+
+  @Column('enum', {
+    enum: SubscriptionStatus,
+    default: SubscriptionStatus.Active,
+  })
+  status!: SubscriptionStatus
+
+  @Column('text', { nullable: true })
+  url?: string
+
+  @Column('enum', {
+    enum: SubscriptionType,
+  })
+  type!: SubscriptionType
+
+  @Column('integer', { default: 0 })
+  count!: number
+
+  @Column({ type: 'timestamp', name: 'refreshed_at', nullable: true })
+  refreshedAt?: Date | null
+
+  @Column({ type: 'timestamp', name: 'most_recent_item_date', nullable: true })
+  mostRecentItemDate?: Date | null
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+}
+
+@Entity({ name: 'library_item' })
+export class LibraryItem extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User, { eager: true })
+  user!: User
+
+  @Column({ type: 'enum', enum: LibraryItemState })
+  state!: LibraryItemState
+
+  @Column({ type: 'text', name: 'original_url' })
+  originalUrl!: string
+
+  @Column({ type: 'text', name: 'download_url' })
+  downloadlUrl!: string
+
+  @Column('text')
+  slug!: string
+
+  @Column('text')
+  title!: string
+
+  @Column('text', { nullable: true })
+  author?: string | null
+
+  @Column('text', { nullable: true })
+  subscription?: string | null
+
+  @OneToOne(() => UploadFile, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'upload_file_id' })
+  uploadFile?: UploadFile
+
+  @Column({ type: 'timestamp', name: 'saved_at' })
+  savedAt!: Date
+
+  @Column({ type: 'timestamp', name: 'deleted_at' })
+  deletedAt?: Date | null
+
+  @Column({ type: 'timestamp', name: 'archived_at' })
+  archivedAt!: Date | null
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+}
+
+@Entity({ name: 'upload_files' })
+export class UploadFile extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User, { eager: true })
+  user!: User
+
+  @Column('text')
+  url!: string
+
+  @Column('text')
+  fileName!: string
+
+  @Column('text')
+  contentType!: string
+
+  @Column('text')
+  status!: string
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+}
+
+@Entity({ name: 'recommendation' })
+export class Recommendation extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'recommender_id' })
+  @ManyToOne(() => User, { eager: true })
+  recommender!: User
+
+  @JoinColumn({ name: 'library_item_id' })
+  @ManyToOne(() => User, { eager: true })
+  libraryItem!: LibraryItem
+
+  @JoinColumn({ name: 'group_id' })
+  @ManyToOne(() => User, { eager: true })
+  group!: Group
+
+  @Column('text', { nullable: true })
+  note?: string | null
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+}
+
+@Entity({ name: 'group_membership' })
+export class GroupMembership extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User, { eager: true })
+  user!: User
+
+  @JoinColumn({ name: 'group_id' })
+  group!: Group
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+
+  @Column('boolean', { default: false })
+  is_admin!: boolean
+}
+
+@Entity({ name: 'features' })
+export class Features extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User, { eager: true })
+  user!: User
+
+  @Column('text')
+  name!: string
+
+  @Column('timestamp', { nullable: true, name: 'granted_at' })
+  grantedAt?: Date | null
+
+  @Column('timestamp', { nullable: true, name: 'expires_at' })
+  expiresAt?: Date | null
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+}
+
+@Entity({ name: 'newsletter_emails' })
+export class EmailAddress extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User)
+  user!: User
+
+  @Column('varchar')
+  address!: string
+
+  @Column('text')
+  folder?: string | null
+
+  @Column('text')
+  name?: string | null
+
+  @Column('text')
+  description?: string | null
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+}
+
+@Entity({ name: 'rules' })
+export class Rule extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User)
+  user!: User
+
+  @Column('varchar')
+  name!: string
+
+  @Column('text')
+  filter!: string
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
+
+  @Column({ type: 'timestamp', name: 'failed_at' })
+  failedAt?: Date
+}
+
+@Entity({ name: 'export' })
+export class Export extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string
+
+  @JoinColumn({ name: 'user_id' })
+  @ManyToOne(() => User, { eager: true })
+  user!: User
+
+  @Column('text', { nullable: true })
+  task_id?: string
+
+  @Column('text')
+  state!: string
+
+  @Column('int', { default: 0 })
+  total_items!: number
+
+  @Column('int', { default: 0 })
+  processed_items!: number
+
+  @Column('text', { nullable: true })
+  signed_url?: string
+
+  @Column({ type: 'timestamp', name: 'created_at' })
+  createdAt!: Date
+
+  @Column({ type: 'timestamp', name: 'updated_at' })
+  updatedAt!: Date
 }

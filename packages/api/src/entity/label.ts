@@ -5,6 +5,7 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  UpdateDateColumn,
 } from 'typeorm'
 import { User } from './user'
 
@@ -31,4 +32,10 @@ export class Label {
 
   @Column('integer', { default: 0 })
   position!: number
+
+  @Column('boolean', { default: false })
+  internal!: boolean
+
+  @UpdateDateColumn()
+  updatedAt?: Date | null
 }
