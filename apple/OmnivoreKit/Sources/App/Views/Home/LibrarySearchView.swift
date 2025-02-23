@@ -75,6 +75,7 @@
         innerBody
       }.introspectViewController { controller in
         searchBar = Introspect.findChild(ofType: UISearchBar.self, in: controller.view)
+        searchBar?.smartQuotesType = .no
       }
     }
 
@@ -100,7 +101,8 @@
                 Spacer()
                 Image(systemName: "chevron.right")
               }.onTapGesture {
-                viewModel.linkRequest = LinkRequest(id: UUID(), serverID: item.id)
+                homeFeedViewModel.pushLinkedRequest(request: LinkRequest(id: UUID(), serverID: item.id))
+                dismiss()
               }
             }
           }
@@ -142,7 +144,7 @@
                 .onTapGesture { setSearchTerm("has:highlights") }
 
               Button(action: {}, label: {
-                Text("[More on Advanced Search](https://omnivore.app/help/search)")
+                Text("[More on Advanced Search](https://docs.omnivore.app/using/search.html)")
                   .underline()
                   .padding(.top, 25)
               })

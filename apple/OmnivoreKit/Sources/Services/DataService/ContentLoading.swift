@@ -3,27 +3,20 @@ import Foundation
 import Models
 import Utils
 
-struct PendingLink {
-  let itemID: String
-  let retryCount: Int
-}
-
 extension DataService {
-  func prefetchPage(pendingLink: PendingLink, username: String) async {
-    let content = try? await loadArticleContent(username: username, itemID: pendingLink.itemID, useCache: false)
+  public func prefetchPage(itemID: String, retryCount: Int, username: String) async {
+    let content = try? await loadArticleContent(username: username, itemID: itemID, useCache: true)
 
-    if content?.contentStatus == .processing, pendingLink.retryCount < 7 {
-      let retryDelayInNanoSeconds = UInt64(pendingLink.retryCount * 2 * 1_000_000_000)
+    if content?.contentStatus == .processing, retryCount < 4 {
+      let retryDelayInNanoSeconds = UInt64(retryCount * 2 * 1_000_000_000)
 
       do {
         try await Task.sleep(nanoseconds: retryDelayInNanoSeconds)
-        logger.debug("fetching content for \(pendingLink.itemID). retry count: \(pendingLink.retryCount)")
+        logger.debug("fetching content for \(itemID). retry count: \(retryCount)")
 
         await prefetchPage(
-          pendingLink: PendingLink(
-            itemID: pendingLink.itemID,
-            retryCount: pendingLink.retryCount + 1
-          ),
+          itemID: itemID,
+          retryCount: retryCount + 1,
           username: username
         )
       } catch {
@@ -63,12 +56,13 @@ extension DataService {
       htmlContent: fetchResult.htmlContent,
       highlightsJSONString: fetchResult.highlights.asJSONString,
       contentStatus: fetchResult.item.isPDF ? .succeeded : fetchResult.item.state,
-      objectID: objectID
+      objectID: objectID,
+      downloadURL: fetchResult.item.downloadURL
     )
   }
 
   func cachedArticleContent(itemID: String) async -> ArticleContent? {
-    let linkedItemFetchRequest: NSFetchRequest<Models.LinkedItem> = LinkedItem.fetchRequest()
+    let linkedItemFetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
     linkedItemFetchRequest.predicate = NSPredicate(
       format: "id == %@", itemID
     )
@@ -91,7 +85,8 @@ extension DataService {
           .filter { $0.serverSyncStatus != ServerSyncStatus.needsDeletion.rawValue }
           .map { InternalHighlight.make(from: $0) }.asJSONString,
         contentStatus: .succeeded,
-        objectID: linkedItem.objectID
+        objectID: linkedItem.objectID,
+        downloadURL: linkedItem.downloadURL ?? ""
       )
     }
   }
@@ -103,11 +98,11 @@ extension DataService {
 
     await backgroundContext.perform { [weak self] in
       guard let self = self else { return }
-      let fetchRequest: NSFetchRequest<Models.LinkedItem> = LinkedItem.fetchRequest()
+      let fetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
       fetchRequest.predicate = NSPredicate(format: "id == %@", articleProps.item.id)
 
       let existingItem = try? self.backgroundContext.fetch(fetchRequest).first
-      let linkedItem = existingItem ?? LinkedItem(entity: LinkedItem.entity(), insertInto: self.backgroundContext)
+      let linkedItem = existingItem ?? LibraryItem(entity: LibraryItem.entity(), insertInto: self.backgroundContext)
       objectID = linkedItem.objectID
 
       let highlightObjects = articleProps.highlights.map {
@@ -166,7 +161,7 @@ extension DataService {
     }
 
     if articleProps.item.isPDF, needsPDFDownload {
-      _ = try await loadPDFData(slug: articleProps.item.slug, pageURLString: articleProps.item.pageURLString)
+      _ = try await loadPDFData(slug: articleProps.item.slug, downloadURL: articleProps.item.downloadURL)
     }
 
     try await backgroundContext.perform { [weak self] in
@@ -188,14 +183,14 @@ extension DataService {
   /// - Returns: The id of the CoreData object if found.
   func linkedItemID(from requestID: String) async -> String? {
     await backgroundContext.perform(schedule: .immediate) {
-      let fetchRequest: NSFetchRequest<Models.LinkedItem> = LinkedItem.fetchRequest()
+      let fetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
       fetchRequest.predicate = NSPredicate(format: "createdId == %@ OR id == %@", requestID, requestID)
       return try? self.backgroundContext.fetch(fetchRequest).first?.unwrappedID
     }
   }
 
   func syncUnsyncedArticleContent(itemID: String) async {
-    let linkedItemFetchRequest: NSFetchRequest<Models.LinkedItem> = LinkedItem.fetchRequest()
+    let linkedItemFetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
     linkedItemFetchRequest.predicate = NSPredicate(
       format: "id == %@", itemID
     )
@@ -231,7 +226,7 @@ extension DataService {
         _ = try await saveURL(id: id, url: url)
       }
     } catch {
-      // We don't propogate these errors, we just let it pass through so
+      // We don't propagate these errors, we just let it pass through so
       // the user can attempt to fetch content again.
       print("Error syncUnsyncedArticleContent", error)
     }

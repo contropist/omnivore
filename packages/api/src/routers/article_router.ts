@@ -4,19 +4,17 @@ import { htmlToSpeechFile } from '@omnivore/text-to-speech-handler'
 import cors from 'cors'
 import express from 'express'
 import * as jwt from 'jsonwebtoken'
-import { createPubSubClient } from '../datalayer/pubsub'
-import { getPageById, updatePage } from '../elastic/pages'
-import { Speech, SpeechState } from '../entity/speech'
-import { getRepository } from '../entity/utils'
+import { Speech } from '../entity/speech'
 import { env } from '../env'
 import { CreateArticleErrorCode } from '../generated/graphql'
+import { userRepository } from '../repository/user'
 import { Claims } from '../resolvers/types'
 import { createPageSaveRequest } from '../services/create_page_save_request'
+import { findLibraryItemById } from '../services/library_item'
 import { getClaimsByToken } from '../utils/auth'
 import { isSiteBlockedForParse } from '../utils/blocked'
 import { corsConfig } from '../utils/corsConfig'
-import { enqueueTextToSpeech } from '../utils/createTask'
-import { buildLogger } from '../utils/logger'
+import { logger } from '../utils/logger'
 import { generateDownloadSignedUrl } from '../utils/uploads'
 
 interface SpeechInput {
@@ -26,7 +24,6 @@ interface SpeechInput {
   language?: string
 }
 const outputFormats = ['mp3', 'speech-marks', 'speech']
-const logger = buildLogger('app.dispatch')
 
 export function articleRouter() {
   const router = express.Router()
@@ -36,6 +33,9 @@ export function articleRouter() {
     const { url } = req.body as {
       url?: string
     }
+    if (!url) {
+      return res.status(400).send({ errorCode: 'BAD_DATA' })
+    }
 
     const token = req?.cookies?.auth || req?.headers?.authorization
     const claims = await getClaimsByToken(token)
@@ -44,20 +44,10 @@ export function articleRouter() {
     }
 
     const { uid } = claims
-
-    logger.info('Article saving request', {
-      body: req.body,
-      labels: {
-        source: 'SaveEndpoint',
-        userId: uid,
-      },
-    })
-
-    if (!url) {
-      return res.status(400).send({ errorCode: 'BAD_DATA' })
+    const user = await userRepository.findById(uid)
+    if (!user) {
+      return res.status(400).send('Bad Request')
     }
-
-    const result = await createPageSaveRequest({ userId: uid, url })
 
     if (isSiteBlockedForParse(url)) {
       return res
@@ -65,14 +55,17 @@ export function articleRouter() {
         .send({ errorCode: CreateArticleErrorCode.NotAllowedToParse })
     }
 
-    if (result.errorCode) {
-      return res.status(400).send({ errorCode: result.errorCode })
-    }
+    try {
+      const result = await createPageSaveRequest({ user, url })
 
-    return res.send({
-      articleSavingRequestId: result.id,
-      url: result.url,
-    })
+      return res.send({
+        articleSavingRequestId: result.id,
+        url: result.originalUrl,
+      })
+    } catch (error) {
+      logger.error('Error saving article:', error)
+      return res.status(500).send({ errorCode: 'INTERNAL_ERROR' })
+    }
   })
 
   router.get(
@@ -81,8 +74,7 @@ export function articleRouter() {
     async (req, res) => {
       const articleId = req.params.id
       const outputFormat = req.params.outputFormat
-      const { voice, priority, secondaryVoice, language } =
-        req.query as SpeechInput
+      const { voice, secondaryVoice, language } = req.query as SpeechInput
       if (!articleId || outputFormats.indexOf(outputFormat) === -1) {
         return res.status(400).send('Invalid data')
       }
@@ -103,91 +95,23 @@ export function articleRouter() {
       })
 
       try {
-        if (outputFormat === 'speech') {
-          const page = await getPageById(articleId)
-          if (!page) {
-            return res.status(404).send('Page not found')
-          }
-          if (page.userId !== uid) {
-            logger.info('User is not allowed to access speech of the article', {
-              userId: uid,
-              articleId,
-            })
-            return res.status(401).send({ errorCode: 'UNAUTHORIZED' })
-          }
-          const speechFile = htmlToSpeechFile({
-            title: page.title,
-            content: page.content,
-            options: {
-              primaryVoice: voice,
-              secondaryVoice: secondaryVoice,
-              language: language || page.language,
-            },
-          })
-          return res.send({ ...speechFile, pageId: articleId })
-        }
-
-        const existingSpeech = await getRepository(Speech).findOne({
-          where: {
-            elasticPageId: articleId,
-            voice,
-          },
-          order: {
-            createdAt: 'DESC',
-          },
-          relations: ['user'],
+        const item = await findLibraryItemById(articleId, uid, {
+          select: ['title', 'readableContent', 'itemLanguage'],
         })
-        if (existingSpeech) {
-          if (existingSpeech.user.id !== uid) {
-            logger.info('User is not allowed to access speech of the article', {
-              userId: uid,
-              articleId,
-            })
-            return res.status(401).send({ errorCode: 'UNAUTHORIZED' })
-          }
-          if (existingSpeech.state === SpeechState.COMPLETED) {
-            logger.info('Found existing completed speech', {
-              audioUrl: existingSpeech.audioFileName,
-              speechMarksUrl: existingSpeech.speechMarksFileName,
-            })
-            await updatePage(
-              existingSpeech.elasticPageId,
-              {
-                listenedAt: new Date(),
-              },
-              { uid, pubsub: createPubSubClient() }
-            )
-            return res.redirect(await redirectUrl(existingSpeech, outputFormat))
-          }
-          if (existingSpeech.state === SpeechState.INITIALIZED) {
-            logger.info('Found existing in progress speech')
-            // retry later
-            return res.status(202).send('Speech is in progress')
-          }
-        }
-
-        logger.info('Create Text to speech task', { articleId })
-        const page = await getPageById(articleId)
-        if (!page) {
+        if (!item) {
           return res.status(404).send('Page not found')
         }
-        // initialize state
-        const speech = await getRepository(Speech).save({
-          user: { id: uid },
-          elasticPageId: articleId,
-          state: SpeechState.INITIALIZED,
-          voice,
+
+        const speechFile = htmlToSpeechFile({
+          title: item.title,
+          content: item.readableContent,
+          options: {
+            primaryVoice: voice,
+            secondaryVoice: secondaryVoice,
+            language: language || item.itemLanguage || undefined,
+          },
         })
-        // enqueue a task to convert text to speech
-        const taskName = await enqueueTextToSpeech({
-          userId: uid,
-          speechId: speech.id,
-          text: page.content,
-          voice: speech.voice,
-          priority: priority || 'high',
-        })
-        logger.info('Start Text to speech task', { taskName })
-        res.status(202).send('Text to speech task started')
+        return res.send({ ...speechFile, pageId: articleId })
       } catch (error) {
         logger.error('Error getting article speech:', error)
         res.status(500).send({ errorCode: 'INTERNAL_ERROR' })

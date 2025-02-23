@@ -1,48 +1,49 @@
 import { Readability } from '@omnivore/readability'
-import normalizeUrl from 'normalize-url'
-import { PubsubClient } from '../datalayer/pubsub'
-import { addHighlightToPage } from '../elastic/highlights'
-import { createPage, getPageByParam, updatePage } from '../elastic/pages'
-import { ArticleSavingRequestStatus, Page, PageType } from '../elastic/types'
+import { DeepPartial } from 'typeorm'
+import { Highlight } from '../entity/highlight'
+import {
+  DirectionalityType,
+  LibraryItem,
+  LibraryItemState,
+} from '../entity/library_item'
+import { User } from '../entity/user'
 import { homePageURL } from '../env'
 import {
-  HighlightType,
-  Maybe,
+  ArticleSavingRequestStatus,
   PreparedDocumentInput,
   SaveErrorCode,
   SavePageInput,
   SaveResult,
 } from '../generated/graphql'
-import { DataModels } from '../resolvers/types'
+import { Merge } from '../util'
 import {
+  cleanUrl,
   generateSlug,
   stringToHash,
   validatedDate,
   wordsCount,
 } from '../utils/helpers'
+import { logger } from '../utils/logger'
 import { parsePreparedContent } from '../utils/parser'
+import { contentReaderForLibraryItem } from '../utils/uploads'
 import { createPageSaveRequest } from './create_page_save_request'
-import { createLabels } from './labels'
-
-type SaveContext = {
-  pubsub: PubsubClient
-  models: DataModels
-  uid: string
-}
-
-type SaverUserData = {
-  userId: string
-  username: string
-}
+import { createHighlight } from './highlights'
+import { createAndAddLabelsToLibraryItem } from './labels'
+import { createOrUpdateLibraryItem } from './library_item'
 
 // where we can use APIs to fetch their underlying content.
 const FORCE_PUPPETEER_URLS = [
-  // twitter status url regex
   /twitter\.com\/(?:#!\/)?(\w+)\/status(?:es)?\/(\d+)(?:\/.*)?/,
   /^((?:https?:)?\/\/)?((?:www|m)\.)?((?:youtube\.com|youtu.be))(\/(?:[\w-]+\?v=|embed\/|v\/)?)([\w-]+)(\S+)?$/,
 ]
+const ALREADY_PARSED_SOURCES = [
+  'puppeteer-parse',
+  'csv-importer',
+  'rss-feeder',
+  'pocket',
+]
 
-const createSlug = (url: string, title?: Maybe<string> | undefined) => {
+const createSlug = (url: string, title?: string | null | undefined) => {
   const { pathname } = new URL(url)
   const croppedPathname = decodeURIComponent(
     pathname
@@ -57,176 +58,194 @@ const createSlug = (url: string, title?: Maybe<string> | undefined) => {
 
 const shouldParseInBackend = (input: SavePageInput): boolean => {
   return (
-    input.source !== 'puppeteer-parse' &&
-    FORCE_PUPPETEER_URLS.some((regex) => regex.test(input.url))
+    ALREADY_PARSED_SOURCES.indexOf(input.source) === -1 &&
+    FORCE_PUPPETEER_URLS.some((regex) => {
+      return regex.test(input.url)
+    })
   )
 }
 
-export const createSavingRequest = (
-  ctx: SaveContext,
-  clientRequestId: string
-) => {
-  return ctx.models.articleSavingRequest.create({
-    userId: ctx.uid,
-    id: clientRequestId,
-  })
-}
+export type SavePageArgs = Merge<
+  SavePageInput,
+  {
+    feedContent?: string
+    previewImage?: string
+    author?: string
+  }
+>
 
 export const savePage = async (
-  ctx: SaveContext,
-  saver: SaverUserData,
-  input: SavePageInput
+  input: SavePageArgs,
+  user: User
 ): Promise<SaveResult> => {
-  const parseResult = await parsePreparedContent(
-    input.url,
-    {
-      document: input.originalContent,
-      pageInfo: {
-        title: input.title,
-        canonicalUrl: input.url,
-      },
-    },
-    input.parseResult
-  )
-  const [newSlug, croppedPathname] = createSlug(input.url, input.title)
-  let slug = newSlug
-  let pageId = input.clientRequestId
-  const articleToSave = parsedContentToPage({
-    url: input.url,
-    title: input.title,
-    userId: saver.userId,
-    pageId,
-    slug,
-    croppedPathname,
-    parsedContent: parseResult.parsedContent,
-    pageType: parseResult.pageType,
-    originalHtml: parseResult.domContent,
-    canonicalUrl: parseResult.canonicalUrl,
-  })
-  // check if the page already exists
-  const existingPage = await getPageByParam({
-    userId: saver.userId,
-    url: articleToSave.url,
-  })
-  // save state
-  articleToSave.archivedAt =
-    input.state === ArticleSavingRequestStatus.Archived ? new Date() : null
-  // add labels to page
-  articleToSave.labels = input.labels
-    ? await createLabels(ctx, input.labels)
-    : undefined
+  const [slug, croppedPathname] = createSlug(input.url, input.title)
+  let clientRequestId = input.clientRequestId
 
-  if (existingPage) {
-    pageId = existingPage.id
-    slug = existingPage.slug
-    if (
-      !(await updatePage(
-        existingPage.id,
-        {
-          // update the page with the new content
-          ...articleToSave,
-          id: pageId, // we don't want to update the id
-          slug, // we don't want to update the slug
-          createdAt: existingPage.createdAt, // we don't want to update the createdAt
-        },
-        ctx
-      ))
-    ) {
-      return {
-        errorCodes: [SaveErrorCode.Unknown],
-        message: 'Failed to update existing page',
-      }
-    }
-  } else if (shouldParseInBackend(input)) {
+  // always parse in backend if the url is in the force puppeteer list
+  if (shouldParseInBackend(input)) {
     try {
       await createPageSaveRequest({
-        userId: saver.userId,
-        url: articleToSave.url,
-        pubsub: ctx.pubsub,
-        articleSavingRequestId: input.clientRequestId,
-        archivedAt: articleToSave.archivedAt,
-        labels: articleToSave.labels,
+        user,
+        url: input.url,
+        articleSavingRequestId: clientRequestId || undefined,
+        state: input.state || undefined,
+        labels: input.labels || undefined,
+        folder: input.folder || undefined,
       })
     } catch (e) {
       return {
+        __typename: 'SaveError',
         errorCodes: [SaveErrorCode.Unknown],
         message: 'Failed to create page save request',
       }
     }
-  } else {
-    const newPageId = await createPage(articleToSave, ctx)
-    if (!newPageId) {
-      return {
-        errorCodes: [SaveErrorCode.Unknown],
-        message: 'Failed to create new page',
-      }
+
+    return {
+      clientRequestId,
+      url: `${homePageURL()}/${user.profile.username}/${slug}`,
     }
-    pageId = newPageId
   }
 
+  const preparedDocument: PreparedDocumentInput = {
+    document: input.originalContent,
+    pageInfo: {
+      title: input.title,
+      canonicalUrl: input.url,
+      previewImage: input.previewImage,
+      author: input.author,
+    },
+  }
+
+  const parseResult = await parsePreparedContent(input.url, preparedDocument)
+
+  const itemToSave = parsedContentToLibraryItem({
+    itemId: clientRequestId,
+    url: input.url,
+    title: input.title,
+    userId: user.id,
+    slug,
+    croppedPathname,
+    parsedContent: parseResult.parsedContent,
+    itemType: parseResult.pageType,
+    originalHtml: parseResult.domContent,
+    canonicalUrl: parseResult.canonicalUrl,
+    savedAt: input.savedAt ? new Date(input.savedAt) : new Date(),
+    publishedAt: input.publishedAt ? new Date(input.publishedAt) : undefined,
+    state: input.state || undefined,
+    rssFeedUrl: input.rssFeedUrl,
+    folder: input.folder,
+    feedContent: input.feedContent,
+    dir: parseResult.parsedContent?.dir,
+    preparedDocument,
+    labelNames: input.labels?.map((label) => label.name),
+    highlightAnnotations: parseResult.highlightData ? [''] : undefined,
+  })
+  const isImported =
+    input.source === 'csv-importer' || input.source === 'pocket'
+
+  // do not publish a pubsub event if the item is imported
+  const newItem = await createOrUpdateLibraryItem(
+    itemToSave,
+    user.id,
+    undefined,
+    isImported
+  )
+  clientRequestId = newItem.id
+
+  // merge labels
+  await createAndAddLabelsToLibraryItem(
+    clientRequestId,
+    user.id,
+    input.labels,
+    input.rssFeedUrl
+  )
+
   if (parseResult.highlightData) {
-    const highlight = {
-      updatedAt: new Date(),
-      createdAt: new Date(),
-      userId: ctx.uid,
-      elasticPageId: pageId,
+    const highlight: DeepPartial<Highlight> = {
       ...parseResult.highlightData,
-      type: HighlightType.Highlight,
+      user: { id: user.id },
+      libraryItem: { id: clientRequestId },
     }
 
-    if (!(await addHighlightToPage(pageId, highlight, ctx))) {
-      return {
-        errorCodes: [SaveErrorCode.EmbeddedHighlightFailed],
-        message: 'Failed to save highlight',
-      }
+    // merge highlights
+    try {
+      await createHighlight(
+        highlight,
+        clientRequestId,
+        user.id,
+        undefined,
+        false
+      )
+    } catch (error) {
+      logger.error('Failed to create highlight', {
+        highlight,
+        clientRequestId,
+        userId: user.id,
+      })
     }
   }
 
   return {
-    clientRequestId: pageId,
-    url: `${homePageURL()}/${saver.username}/${slug}`,
+    clientRequestId,
+    url: `${homePageURL()}/${user.profile.username}/${slug}`,
   }
 }
 
-// convert parsed content to an elastic page
-export const parsedContentToPage = ({
+// convert parsed content to an library item
+export const parsedContentToLibraryItem = ({
   url,
   userId,
-  originalHtml,
-  pageId,
+  itemId,
   parsedContent,
   slug,
   croppedPathname,
   title,
   preparedDocument,
   canonicalUrl,
-  pageType,
+  itemType,
   uploadFileHash,
   uploadFileId,
-  saveTime,
+  savedAt,
+  publishedAt,
+  state,
+  rssFeedUrl,
+  folder,
+  feedContent,
+  dir,
+  labelNames,
+  highlightAnnotations,
 }: {
   url: string
   userId: string
   slug: string
   croppedPathname: string
-  pageType: PageType
+  itemType: string
   parsedContent: Readability.ParseResult | null
   originalHtml?: string | null
-  pageId?: string | null
+  itemId?: string | null
   title?: string | null
   preparedDocument?: PreparedDocumentInput | null
   canonicalUrl?: string | null
   uploadFileHash?: string | null
   uploadFileId?: string | null
-  saveTime?: Date
-}): Page => {
+  savedAt?: Date
+  publishedAt?: Date | null
+  state?: ArticleSavingRequestStatus | null
+  rssFeedUrl?: string | null
+  folder?: string | null
+  feedContent?: string | null
+  dir?: string | null
+  labelNames?: string[]
+  highlightAnnotations?: string[]
+}): DeepPartial<LibraryItem> & { originalUrl: string } => {
+  logger.info('save_page', { url, state, itemId })
   return {
-    id: pageId || '',
+    id: itemId || undefined,
     slug,
-    userId,
-    originalHtml,
-    content: parsedContent?.content || '',
+    user: { id: userId },
+    readableContent: parsedContent?.content || '',
     description: parsedContent?.excerpt,
+    previewContent: parsedContent?.excerpt,
     title:
       title ||
       parsedContent?.title ||
@@ -234,24 +253,43 @@ export const parsedContentToPage = ({
       croppedPathname ||
       parsedContent?.siteName ||
       url,
-    author: parsedContent?.byline ?? undefined,
-    url: normalizeUrl(canonicalUrl || url, {
-      stripHash: true,
-      stripWWW: false,
-    }),
-    pageType,
-    hash: uploadFileHash || stringToHash(parsedContent?.content || url),
-    image: parsedContent?.previewImage ?? undefined,
-    publishedAt: validatedDate(parsedContent?.publishedDate ?? undefined),
-    uploadFileId,
-    readingProgressPercent: 0,
-    readingProgressAnchorIndex: 0,
-    state: ArticleSavingRequestStatus.Succeeded,
-    createdAt: saveTime || new Date(),
-    savedAt: saveTime || new Date(),
-    siteName: parsedContent?.siteName ?? undefined,
-    language: parsedContent?.language ?? undefined,
-    siteIcon: parsedContent?.siteIcon ?? undefined,
-    wordsCount: wordsCount(parsedContent?.textContent || ''),
+    author: preparedDocument?.pageInfo.author || parsedContent?.byline,
+    originalUrl: cleanUrl(canonicalUrl || url),
+    itemType,
+    textContentHash:
+      uploadFileHash || stringToHash(parsedContent?.content || url),
+    thumbnail:
+      (preparedDocument?.pageInfo.previewImage ||
+        parsedContent?.previewImage) ??
+      undefined,
+    publishedAt: validatedDate(
+      publishedAt || parsedContent?.publishedDate || undefined
+    ),
+    uploadFileId: uploadFileId || undefined,
+    readingProgressTopPercent: 0,
+    readingProgressHighestReadAnchor: 0,
+    state: state
+      ? (state as unknown as LibraryItemState)
+      : LibraryItemState.Succeeded,
+    savedAt: validatedDate(savedAt) || new Date(),
+    siteName: parsedContent?.siteName,
+    itemLanguage: parsedContent?.language,
+    siteIcon: parsedContent?.siteIcon,
+    wordCount: parsedContent?.textContent
+      ? wordsCount(parsedContent.textContent)
+      : wordsCount(parsedContent?.content || '', true),
+    contentReader: contentReaderForLibraryItem(itemType, uploadFileId),
+    subscription: rssFeedUrl,
+    folder: folder || 'inbox',
+    archivedAt:
+      state === ArticleSavingRequestStatus.Archived ? new Date() : null,
+    deletedAt: state === ArticleSavingRequestStatus.Deleted ? new Date() : null,
+    feedContent,
+    directionality:
+      dir?.toLowerCase() === 'rtl'
+        ? DirectionalityType.RTL
+        : DirectionalityType.LTR, // default to LTR
+    labelNames,
+    highlightAnnotations,
   }
 }

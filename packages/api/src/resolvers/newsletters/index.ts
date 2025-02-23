@@ -1,4 +1,8 @@
-import { authorized } from '../../utils/helpers'
+import {
+  DEFAULT_NEWSLETTER_FOLDER,
+  NewsletterEmail,
+} from '../../entity/newsletter_email'
+import { env } from '../../env'
 import {
   CreateNewsletterEmailError,
   CreateNewsletterEmailErrorCode,
@@ -6,30 +10,40 @@ import {
   DeleteNewsletterEmailError,
   DeleteNewsletterEmailErrorCode,
   DeleteNewsletterEmailSuccess,
+  MutationCreateNewsletterEmailArgs,
   MutationDeleteNewsletterEmailArgs,
+  MutationUpdateNewsletterEmailArgs,
   NewsletterEmailsError,
   NewsletterEmailsErrorCode,
   NewsletterEmailsSuccess,
+  UpdateNewsletterEmailError,
+  UpdateNewsletterEmailErrorCode,
+  UpdateNewsletterEmailSuccess,
 } from '../../generated/graphql'
+import { getRepository } from '../../repository'
 import {
   createNewsletterEmail,
   deleteNewsletterEmail,
   getNewsletterEmails,
+  updateNewsletterEmail,
 } from '../../services/newsletters'
-import { NewsletterEmail } from '../../entity/newsletter_email'
-import { analytics } from '../../utils/analytics'
-import { env } from '../../env'
-import { User } from '../../entity/user'
 import { unsubscribeAll } from '../../services/subscriptions'
-import { getRepository } from '../../entity/utils'
+import { Merge } from '../../util'
+import { analytics } from '../../utils/analytics'
+import { authorized } from '../../utils/gql-utils'
 
-export const createNewsletterEmailResolver = authorized<
+export type CreateNewsletterEmailSuccessPartial = Merge<
   CreateNewsletterEmailSuccess,
-  CreateNewsletterEmailError
->(async (_parent, _args, { claims }) => {
-  console.log('createNewsletterEmailResolver')
-  analytics.track({
-    userId: claims.uid,
+  { newsletterEmail: NewsletterEmail }
+>
+export const createNewsletterEmailResolver = authorized<
+  CreateNewsletterEmailSuccessPartial,
+  CreateNewsletterEmailError,
+  MutationCreateNewsletterEmailArgs
+>(async (_parent, { input }, { uid, log }) => {
+  log.info('createNewsletterEmailResolver')
+  analytics.capture({
+    distinctId: uid,
     event: 'newsletter_email_address_created',
     properties: {
       env: env.server.apiEnv,
@@ -37,16 +51,19 @@ export const createNewsletterEmailResolver = authorized<
   })
 
   try {
-    const newsletterEmail = await createNewsletterEmail(claims.uid)
+    const newsletterEmail = await createNewsletterEmail(
+      uid,
+      undefined,
+      input?.folder || DEFAULT_NEWSLETTER_FOLDER,
+      input?.name || undefined,
+      input?.description || undefined
+    )
 
     return {
-      newsletterEmail: {
-        ...newsletterEmail,
-        subscriptionCount: 0,
-      },
+      newsletterEmail,
     }
   } catch (e) {
-    console.log(e)
+    log.error('createNewsletterEmailResolver', e)
 
     return {
       errorCodes: [CreateNewsletterEmailErrorCode.BadRequest],
@@ -54,32 +71,22 @@ export const createNewsletterEmailResolver = authorized<
   }
 })
 
-export const newsletterEmailsResolver = authorized<
+export type NewsletterEmailsSuccessPartial = Merge<
   NewsletterEmailsSuccess,
+  { newsletterEmails: NewsletterEmail[] }
+>
+export const newsletterEmailsResolver = authorized<
+  NewsletterEmailsSuccessPartial,
   NewsletterEmailsError
->(async (_parent, _args, { claims }) => {
-  console.log('newsletterEmailsResolver')
-
+>(async (_parent, _args, { uid, log }) => {
   try {
-    const user = await getRepository(User).findOneBy({
-      id: claims.uid,
-    })
-    if (!user) {
-      return Promise.reject({
-        errorCode: NewsletterEmailsErrorCode.Unauthorized,
-      })
-    }
-
-    const newsletterEmails = await getNewsletterEmails(user.id)
+    const newsletterEmails = await getNewsletterEmails(uid)
 
     return {
-      newsletterEmails: newsletterEmails.map((newsletterEmail) => ({
-        ...newsletterEmail,
-        subscriptionCount: newsletterEmail.subscriptions.length,
-      })),
+      newsletterEmails,
     }
   } catch (e) {
-    console.log(e)
+    log.error('newsletterEmailsResolver', e)
 
     return {
       errorCodes: [NewsletterEmailsErrorCode.BadRequest],
@@ -87,14 +94,17 @@ export const newsletterEmailsResolver = authorized<
   }
 })
 
-export const deleteNewsletterEmailResolver = authorized<
+export type DeleteNewsletterEmailSuccessPartial = Merge<
   DeleteNewsletterEmailSuccess,
+  { newsletterEmail: NewsletterEmail }
+>
+export const deleteNewsletterEmailResolver = authorized<
+  DeleteNewsletterEmailSuccessPartial,
   DeleteNewsletterEmailError,
   MutationDeleteNewsletterEmailArgs
->(async (_parent, args, { claims }) => {
-  console.log('deleteNewsletterEmailResolver')
-  analytics.track({
-    userId: claims.uid,
+>(async (_parent, args, { uid, log }) => {
+  analytics.capture({
+    distinctId: uid,
     event: 'newsletter_email_address_deleted',
     properties: {
       env: env.server.apiEnv,
@@ -105,6 +115,7 @@ export const deleteNewsletterEmailResolver = authorized<
     const newsletterEmail = await getRepository(NewsletterEmail).findOne({
       where: {
         id: args.newsletterEmailId,
+        user: { id: uid },
       },
       relations: ['user', 'subscriptions'],
     })
@@ -115,22 +126,13 @@ export const deleteNewsletterEmailResolver = authorized<
       }
     }
 
-    if (newsletterEmail.user.id !== claims.uid) {
-      return {
-        errorCodes: [DeleteNewsletterEmailErrorCode.Unauthorized],
-      }
-    }
-
     // unsubscribe all before deleting
     await unsubscribeAll(newsletterEmail)
 
     const deleted = await deleteNewsletterEmail(args.newsletterEmailId)
     if (deleted) {
       return {
-        newsletterEmail: {
-          ...newsletterEmail,
-          subscriptionCount: newsletterEmail.subscriptions.length,
-        },
+        newsletterEmail,
       }
     } else {
       // when user tries to delete other's newsletters emails or email already deleted
@@ -138,11 +140,47 @@ export const deleteNewsletterEmailResolver = authorized<
         errorCodes: [DeleteNewsletterEmailErrorCode.NotFound],
       }
     }
-  } catch (e) {
-    console.log(e)
+  } catch (error) {
+    log.error('deleteNewsletterEmailResolver', error)
 
     return {
       errorCodes: [DeleteNewsletterEmailErrorCode.BadRequest],
     }
+  }
+})
+
+export type UpdateNewsletterEmailSuccessPartial = Merge<
+  UpdateNewsletterEmailSuccess,
+  { newsletterEmail: NewsletterEmail }
+>
+export const updateNewsletterEmailResolver = authorized<
+  UpdateNewsletterEmailSuccessPartial,
+  UpdateNewsletterEmailError,
+  MutationUpdateNewsletterEmailArgs
+>(async (_parent, { input }, { uid, log }) => {
+  analytics.capture({
+    distinctId: uid,
+    event: 'newsletter_email_updated',
+    properties: {
+      env: env.server.apiEnv,
+      ...input,
+    },
+  })
+
+  const updatedNewsletterEmail = await updateNewsletterEmail(input.id, uid, {
+    name: input.name,
+    description: input.description,
+    folder: input.folder,
+  })
+  if (!updatedNewsletterEmail) {
+    log.error('failed to update newsletter email')
+
+    return {
+      errorCodes: [UpdateNewsletterEmailErrorCode.Unauthorized],
+    }
+  }
+
+  return {
+    newsletterEmail: updatedNewsletterEmail,
   }
 })

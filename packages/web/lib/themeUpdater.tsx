@@ -8,6 +8,8 @@ import {
 } from '../components/tokens/stitches.config'
 
 const themeKey = 'theme'
+const preferredDarkThemeKey = 'preferredDarkThemeKey'
+const preferredLightThemeKey = 'preferredLightThemeKey'
 
 // Map legacy theme names to their new equivelents
 const LEGACY_THEMES: { [string: string]: string } = {
@@ -25,8 +27,36 @@ export function updateTheme(themeId: string): void {
   updateThemeLocally(themeId)
 }
 
+const visibleThemeId = (themeId: string) => {
+  if (themeId == ThemeId.System) {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        try {
+          const preferred = window.localStorage.getItem(preferredDarkThemeKey)
+          if (preferred) {
+            return JSON.parse(preferred)
+          }
+        } catch {}
+        return ThemeId.Dark
+      } else {
+        try {
+          const preferred = window.localStorage.getItem(preferredLightThemeKey)
+          if (preferred) {
+            return JSON.parse(preferred)
+          }
+        } catch {}
+        return ThemeId.Light
+      }
+    }
+    return ThemeId.Light
+  } else {
+    return themeId
+  }
+}
+
 export function getTheme(themeId: string) {
-  switch (themeId) {
+  const themeToUse = visibleThemeId(themeId)
+  switch (themeToUse) {
     case ThemeId.Dark:
       return darkTheme
     case ThemeId.Sepia:
@@ -56,7 +86,7 @@ export function updateThemeLocally(themeId: string): void {
 }
 
 export function currentThemeName(): string {
-  switch (currentTheme()) {
+  switch (getCurrentLocalTheme()) {
     case ThemeId.Light:
       return 'Light'
     case ThemeId.Dark:
@@ -71,7 +101,7 @@ export function currentThemeName(): string {
   return 'Light'
 }
 
-export function currentTheme(): ThemeId | undefined {
+export function getCurrentLocalTheme(): ThemeId | undefined {
   if (typeof window === 'undefined') {
     return undefined
   }
@@ -88,7 +118,7 @@ export function currentTheme(): ThemeId | undefined {
   return ThemeId.Light
 }
 
-export function applyStoredTheme(syncWithServer = true): ThemeId | undefined {
+export function applyStoredTheme(): ThemeId | undefined {
   if (typeof window === 'undefined') {
     return undefined
   }
@@ -107,6 +137,41 @@ export function isDarkTheme(): boolean {
   return (
     currentTheme === 'Dark' ||
     currentTheme === 'Darker' ||
+    currentTheme === 'Apollo' ||
     currentTheme == 'Black'
   )
+}
+
+export const highlightColors = ['yellow', 'red', 'green', 'blue']
+
+export const highlightColor = (name: string | undefined) => {
+  switch (name) {
+    case 'green':
+      return '#55C689'
+    case 'blue':
+      return '#6AB1FF'
+    case 'yellow':
+      return '#FFD234'
+    case 'orange':
+      return '#FEB56D'
+    case 'red':
+      return '#FB9A9A'
+  }
+  return '#FFD234'
+}
+
+export const highlightColorVar = (name: string | undefined) => {
+  switch (name) {
+    case 'green':
+      return 'var(--colors-highlight_background_green)'
+    case 'blue':
+      return 'var(--colors-highlight_background_blue)'
+    case 'yellow':
+      return 'var(--colors-highlight_background_yellow)'
+    case 'orange':
+      return 'var(--colors-highlight_background_orange)'
+    case 'red':
+      return 'var(--colors-highlight_background_red)'
+  }
+  return 'var(--colors-highlightBackground)'
 }

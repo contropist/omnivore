@@ -1,6 +1,7 @@
-import { Rule, RuleAction } from '../entity/rule'
-import { getRepository } from '../entity/utils'
-import { ILike } from 'typeorm'
+import { ArrayContains, ILike, IsNull, Not } from 'typeorm'
+import { Rule, RuleAction, RuleEventType } from '../entity/rule'
+import { StatusType } from '../entity/user'
+import { authTrx, getRepository } from '../repository'
 
 export const createRule = async (
   userId: string,
@@ -11,17 +12,72 @@ export const createRule = async (
     filter: string
   }
 ): Promise<Rule> => {
-  const existingRule = await getRepository(Rule).findOneBy({
-    user: { id: userId },
-    name: ILike(rule.name),
-  })
+  const existingRule = await authTrx((t) =>
+    t.getRepository(Rule).findOneBy({
+      user: { id: userId },
+      name: ILike(rule.name),
+    })
+  )
 
   if (existingRule) {
     return existingRule
   }
 
-  return getRepository(Rule).save({
-    ...rule,
-    user: { id: userId },
+  return authTrx(
+    (t) =>
+      t.getRepository(Rule).save({
+        ...rule,
+        user: { id: userId },
+      }),
+    {
+      uid: userId,
+    }
+  )
+}
+
+export const deleteRule = async (id: string, userId: string) => {
+  return authTrx(
+    async (t) => {
+      const repo = t.getRepository(Rule)
+      const rule = await repo.findOneByOrFail({ id, user: { id: userId } })
+      await repo.delete(id)
+      return rule
+    },
+    {
+      uid: userId,
+    }
+  )
+}
+
+export const deleteRules = async (userId: string) => {
+  return authTrx(
+    (t) => t.getRepository(Rule).delete({ user: { id: userId } }),
+    {
+      uid: userId,
+    }
+  )
+}
+
+export const findEnabledRules = async (
+  userId: string,
+  eventType: RuleEventType
+) => {
+  return getRepository(Rule).findBy({
+    user: { id: userId, status: StatusType.Active },
+    enabled: true,
+    eventTypes: ArrayContains([eventType]),
+    failedAt: IsNull(), // only rules that have not failed
   })
+}
+
+export const markRuleAsFailed = async (id: string, userId: string) => {
+  return authTrx(
+    (t) =>
+      t.getRepository(Rule).update(id, {
+        failedAt: new Date(),
+      }),
+    {
+      uid: userId,
+    }
+  )
 }

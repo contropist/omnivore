@@ -1,14 +1,15 @@
-import { createTestUser, deleteTestUser } from '../db'
-import { createTestElasticPage, graphqlRequest, request } from '../util'
 import { expect } from 'chai'
 import 'mocha'
+import { LibraryItem } from '../../src/entity/library_item'
 import { User } from '../../src/entity/user'
-import { Page } from '../../src/elastic/types'
+import { deleteUser } from '../../src/services/user'
+import { createTestLibraryItem, createTestUser } from '../db'
+import { graphqlRequest, request } from '../util'
 
 describe('Update API', () => {
   let user: User
   let authToken: string
-  let page: Page
+  let item: LibraryItem
 
   before(async () => {
     // create test user and login
@@ -18,33 +19,36 @@ describe('Update API', () => {
       .send({ fakeEmail: user.email })
 
     authToken = res.body.authToken
-    page = await createTestElasticPage(user.id)
+    item = await createTestLibraryItem(user.id)
   })
 
   after(async () => {
     // clean up
-    await deleteTestUser(user.id)
+    await deleteUser(user.id)
   })
 
   describe('update page', () => {
     let query: string
-    let title = 'New Title'
-    let description = 'New Description'
+    const title = 'New Title'
+    const description = 'New Description'
+    const previewImage = 'https://omnivore.app/image.png'
 
     beforeEach(() => {
       query = `
         mutation {
           updatePage(
             input: {
-              pageId: "${page.id}"
+              pageId: "${item.id}"
               title: "${title}"
               description: "${description}"
+              previewImage: "${previewImage}"
             }
           ) {
             ... on UpdatePageSuccess {
               updatedPage {
                 title
                 description
+                image
               }
             }
             ... on UpdatePageError {
@@ -61,6 +65,7 @@ describe('Update API', () => {
       const updatedPage = res?.body.data.updatePage.updatedPage
       expect(updatedPage?.title).to.eql(title)
       expect(updatedPage?.description).to.eql(description)
+      expect(updatedPage?.image).to.eql(previewImage)
     })
   })
 })

@@ -23,11 +23,14 @@ export class Filter {
   @Column('varchar', { length: 255 })
   name!: string
 
-  @Column('varchar', { length: 255, nullable: true })
+  @Column('varchar', { length: 255, nullable: true, default: null })
   description?: string | null
 
   @Column('varchar', { length: 255 })
   filter!: string
+
+  @Column('varchar', { length: 255, default: 'Search' })
+  category!: string
 
   @Column('integer', { default: 0 })
   position!: number
@@ -37,4 +40,13 @@ export class Filter {
 
   @UpdateDateColumn({ default: () => 'CURRENT_TIMESTAMP' })
   updatedAt!: Date
+
+  @Column('boolean', { default: false })
+  defaultFilter!: boolean
+
+  @Column('boolean', { default: true })
+  visible!: boolean
+
+  @Column('text')
+  folder!: string
 }

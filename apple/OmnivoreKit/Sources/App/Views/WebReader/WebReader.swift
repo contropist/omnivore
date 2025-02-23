@@ -4,14 +4,17 @@ import Utils
 import Views
 import WebKit
 
+@MainActor
 struct WebReader: PlatformViewRepresentable {
-  let item: LinkedItem
+  let item: Models.LibraryItem
+  let viewModel: WebReaderViewModel
   let articleContent: ArticleContent
   let openLinkAction: (URL) -> Void
   let tapHandler: () -> Void
+  let explainHandler: ((String) -> Void)?
   let scrollPercentHandler: (Int) -> Void
   let webViewActionHandler: (WKScriptMessage, WKScriptMessageReplyHandler?) -> Void
-  let navBarVisibilityRatioUpdater: (Double) -> Void
+  let navBarVisibilityUpdater: (Bool) -> Void
 
   @Binding var readerSettingsChangedTransactionID: UUID?
   @Binding var annotationSaveTransactionID: UUID?
@@ -49,6 +52,7 @@ struct WebReader: PlatformViewRepresentable {
     let contentController = WKUserContentController()
 
     webView.tapHandler = tapHandler
+    webView.explainHandler = explainHandler
     webView.navigationDelegate = context.coordinator
     webView.configuration.userContentController = contentController
     webView.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -64,11 +68,21 @@ struct WebReader: PlatformViewRepresentable {
       webView.scrollView.verticalScrollIndicatorInsets.top = readerViewNavBarHeight
       webView.configuration.userContentController.add(webView, name: "viewerAction")
 
+      if #available(iOS 15.4, *) {
+        webView.configuration.preferences.isElementFullscreenEnabled = true
+      }
+
       webView.scrollView.indicatorStyle = ThemeManager.currentTheme.isDark ?
         UIScrollView.IndicatorStyle.white :
         UIScrollView.IndicatorStyle.black
     #else
       webView.setValue(false, forKey: "drawsBackground")
+    #endif
+
+    #if DEBUG
+      if #available(iOS 16.4, *) {
+        webView.isInspectable = true
+      }
     #endif
 
     for action in WebViewAction.allCases {
@@ -81,7 +95,7 @@ struct WebReader: PlatformViewRepresentable {
 
     context.coordinator.linkHandler = openLinkAction
     context.coordinator.webViewActionHandler = webViewActionHandler
-    context.coordinator.updateNavBarVisibilityRatio = navBarVisibilityRatioUpdater
+    context.coordinator.updateNavBarVisibility = navBarVisibilityUpdater
     context.coordinator.scrollPercentHandler = scrollPercentHandler
     context.coordinator.updateShowBottomBar = { newValue in
       self.showBottomBar = newValue
@@ -99,7 +113,7 @@ struct WebReader: PlatformViewRepresentable {
       do {
         try (webView as? OmnivoreWebView)?.dispatchEvent(.saveAnnotation(annotation: annotation))
       } catch {
-        showInSnackbar("Error saving note.")
+        Snackbar.show(message: "Error saving note.", dismissAfter: 2000)
       }
     }
 

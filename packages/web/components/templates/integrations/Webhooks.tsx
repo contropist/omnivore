@@ -4,7 +4,7 @@ import Image from 'next/image'
 import { Box, HStack, SpanBox, VStack } from '../../elements/LayoutPrimitives'
 import { Button } from '../../elements/Button'
 
-import { Link, Plus } from 'phosphor-react'
+import { Link, Plus } from '@phosphor-icons/react'
 import { useGetWebhooksQuery } from '../../../lib/networking/queries/useGetWebhooksQuery'
 import { useMemo } from 'react'
 
@@ -44,7 +44,6 @@ export function Webhooks(): JSX.Element {
     return webhooksList
   }, [webhooks])
 
-  console.log('webhooksList', webhooksList)
   return (
     <VStack
       distribution={'start'}
@@ -140,7 +139,7 @@ export function Webhooks(): JSX.Element {
                 }}
               >
                 <h3>{item.method}</h3>
-                <p>{item.createdAt}</p>
+                <p>{item.createdAt?.toLocaleDateString()}</p>
               </Box>
             </Box>
           )

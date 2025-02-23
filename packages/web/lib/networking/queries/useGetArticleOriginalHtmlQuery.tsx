@@ -1,6 +1,7 @@
 import { gql } from 'graphql-request'
 import useSWRImmutable from 'swr'
 import { makeGqlFetcher, RequestContext, ssrFetcher } from '../networkHelpers'
+import { ArticleAttributes } from '../library_items/useLibraryItems'
 
 type ArticleQueryInput = {
   username?: string
@@ -15,11 +16,6 @@ type ArticleData = {
 type NestedArticleData = {
   article: ArticleAttributes
   errorCodes?: string[]
-}
-
-export type ArticleAttributes = {
-  id: string
-  originalHtml: string
 }
 
 const query = gql`
@@ -49,12 +45,11 @@ export function useGetArticleOriginalHtmlQuery({
 
   const { data } = useSWRImmutable(
     slug ? [query, username, slug] : null,
-    makeGqlFetcher(variables)
+    makeGqlFetcher(query, variables),
+    {}
   )
 
   const resultData: ArticleData | undefined = data as ArticleData
-  console.log('RESULT', JSON.stringify(data))
-
   return resultData?.article.article.originalHtml
 }
 

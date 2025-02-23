@@ -2,23 +2,36 @@
   "name": "@omnivore/content-fetch",
   "version": "1.0.0",
   "description": "Service that fetches page content from a URL",
-  "main": "index.js",
+  "main": "build/src/index.js",
+  "files": [
+    "build/src"
+  ],
   "dependencies": {
+    "@google-cloud/storage": "^7.0.1",
+    "@omnivore/puppeteer-parse": "^1.0.0",
+    "@omnivore/utils": "1.0.0",
+    "axios": "^0.27.2",
+    "bullmq": "^5.1.1",
     "dotenv": "^8.2.0",
     "express": "^4.17.1",
-    "@google-cloud/functions-framework": "^3.0.0",
-    "@omnivore/puppeteer-parse": "^1.0.0",
-    "@sentry/serverless": "^6.13.3",
-    "winston": "^3.3.3"
+    "express-async-handler": "^1.2.0",
+    "jsonwebtoken": "^8.5.1",
+    "posthog-node": "^3.6.3"
   },
   "devDependencies": {
+    "@types/express": "^4.17.1",
+    "@types/jsonwebtoken": "^8.5.0",
     "chai": "^4.3.6",
     "mocha": "^10.0.0"
   },
   "scripts": {
-    "start": "node app.js",
-    "start_gcf": "npx functions-framework --port=9090 --target=puppeteer",
-    "start_preview": "npx functions-framework --target=preview",
-    "test": "mocha test/*.js"
+    "test": "yarn mocha -r ts-node/register --config mocha-config.json",
+    "test:typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext ts,js,tsx,jsx",
+    "build": "tsc",
+    "start": "node build/src/app.js"
+  },
+  "volta": {
+    "extends": "../../package.json"
   }
 }

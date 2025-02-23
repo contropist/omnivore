@@ -3,6 +3,7 @@ import Services
 import SwiftUI
 import Views
 import WebKit
+import Utils
 
 struct SafariWebLink: Identifiable {
   let id: UUID
@@ -16,7 +17,13 @@ struct SafariWebLink: Identifiable {
   @Published var isDownloadingAudio: Bool = false
   @Published var audioDownloadTask: Task<Void, Error>?
 
-  func hasOriginalUrl(_ item: LinkedItem) -> Bool {
+  @Published var operationMessage: String?
+  @Published var showOperationToast: Bool = false
+  @Published var operationStatus: OperationStatus = .none
+
+  @Published var explainText: String?
+
+  func hasOriginalUrl(_ item: Models.LibraryItem) -> Bool {
     if let pageURLString = item.pageURLString, let host = URL(string: pageURLString)?.host {
       if host == "omnivore.app" {
         return false
@@ -26,8 +33,8 @@ struct SafariWebLink: Identifiable {
     return false
   }
 
-  func downloadAudio(audioController: AudioController, item: LinkedItem) {
-    Snackbar.show(message: "Downloading Offline Audio")
+  func downloadAudio(audioController: AudioController, item: Models.LibraryItem) {
+    Snackbar.show(message: "Downloading Offline Audio", dismissAfter: 2000)
     isDownloadingAudio = true
 
     if let audioDownloadTask = audioDownloadTask {
@@ -41,7 +48,7 @@ struct SafariWebLink: Identifiable {
       DispatchQueue.main.async {
         self.isDownloadingAudio = false
         if !canceled {
-          Snackbar.show(message: downloaded ? "Audio file downloaded" : "Error downloading audio")
+          Snackbar.show(message: downloaded ? "Audio file downloaded" : "Error downloading audio", dismissAfter: 2000)
         }
       }
     }
@@ -163,7 +170,7 @@ struct SafariWebLink: Identifiable {
       return
     }
 
-    dataService.updateLinkReadingProgress(itemID: itemID, readingProgress: readingProgress, anchorIndex: anchorIndex)
+    dataService.updateLinkReadingProgress(itemID: itemID, readingProgress: readingProgress, anchorIndex: anchorIndex, force: false)
     replyHandler(["result": true], nil)
   }
 
@@ -202,12 +209,11 @@ struct SafariWebLink: Identifiable {
   func saveLink(dataService: DataService, url: URL) {
     Task {
       do {
-        Snackbar.show(message: "Saving link")
-        print("SAVING: ", url.absoluteString)
+        Snackbar.show(message: "Saving link", dismissAfter: 5000)
         _ = try await dataService.createPageFromUrl(id: UUID().uuidString, url: url.absoluteString)
-        Snackbar.show(message: "Link saved")
+        Snackbar.show(message: "Link saved", dismissAfter: 2000)
       } catch {
-        Snackbar.show(message: "Error saving link")
+        Snackbar.show(message: "Error saving link", dismissAfter: 2000)
       }
     }
   }
@@ -215,15 +221,30 @@ struct SafariWebLink: Identifiable {
   func saveLinkAndFetch(dataService: DataService, username: String, url: URL) {
     Task {
       do {
-        Snackbar.show(message: "Saving link")
+        Snackbar.show(message: "Saving link", dismissAfter: 5000)
         let requestId = UUID().uuidString
         _ = try await dataService.createPageFromUrl(id: requestId, url: url.absoluteString)
-        Snackbar.show(message: "Link saved")
+        Snackbar.show(message: "Link saved", dismissAfter: 2000)
 
         await loadContent(dataService: dataService, username: username, itemID: requestId, retryCount: 0)
       } catch {
-        Snackbar.show(message: "Error saving link")
+        Snackbar.show(message: "Error saving link", dismissAfter: 2000)
       }
     }
+  }
+  
+  func trackReadEvent(item: Models.LibraryItem) {
+    let itemID = item.unwrappedID
+    let slug = item.unwrappedSlug
+    let originalArticleURL = item.unwrappedPageURLString
+
+    EventTracker.track(
+      .linkRead(
+        linkID: itemID,
+        slug: slug,
+        reader: "WEB",
+        originalArticleURL: originalArticleURL
+      )
+    )
   }
 }

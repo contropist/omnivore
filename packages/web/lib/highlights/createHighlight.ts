@@ -8,7 +8,10 @@ import {
 } from './highlightGenerator'
 import type { HighlightLocation } from './highlightGenerator'
 import { extendRangeToWordBoundaries } from './normalizeHighlightRange'
-import type { Highlight } from '../networking/fragments/highlightFragment'
+import type {
+  Highlight,
+  HighlightType,
+} from '../networking/fragments/highlightFragment'
 import { removeHighlights } from './deleteHighlight'
 import { ArticleMutations } from '../articleActions'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
@@ -17,6 +20,7 @@ type CreateHighlightInput = {
   selection: SelectionAttributes
   articleId: string
   annotation?: string
+  color?: string
   existingHighlights: Highlight[]
   highlightStartEndOffsets: HighlightLocation[]
   highlightPositionPercent?: number
@@ -50,7 +54,7 @@ export async function createHighlight(
   if (!input.selection.selection) {
     return {}
   }
-
+  console.log(' overlapping: ', input.selection.overlapHighlights)
   const shouldMerge = input.selection.overlapHighlights.length > 0
 
   const { range, selection } = input.selection
@@ -94,14 +98,18 @@ export async function createHighlight(
   const highlightAttributes = makeHighlightNodeAttributes(
     patch,
     id,
-    annotations.length > 0
+    annotations.length > 0,
+    false,
+    input.color
   )
 
   const newHighlightAttributes = {
     id,
     shortId: nanoid(8),
     patch,
+    type: 'HIGHLIGHT' as HighlightType,
 
+    color: input.color,
     prefix: highlightAttributes.prefix,
     suffix: highlightAttributes.suffix,
     quote: htmlToMarkdown(container.innerHTML),
@@ -130,6 +138,8 @@ export async function createHighlight(
       newHighlightAttributes
     )
   }
+
+  document.dispatchEvent(new Event('highlightsUpdated'))
 
   if (highlight) {
     const highlights = [...keptHighlights, highlight]

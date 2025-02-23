@@ -1,53 +1,27 @@
-import Postgrator from 'postgrator'
-import { User } from '../src/entity/user'
-import { Profile } from '../src/entity/profile'
-import { Page } from '../src/entity/page'
-import { Link } from '../src/entity/link'
-import { Reminder } from '../src/entity/reminder'
-import { NewsletterEmail } from '../src/entity/newsletter_email'
-import { UserDeviceToken } from '../src/entity/user_device_tokens'
+import { DeepPartial } from 'typeorm'
+import { appDataSource } from '../src/data_source'
+import { EntityLabel, LabelSource } from '../src/entity/entity_label'
+import { Filter } from '../src/entity/filter'
+import { Highlight } from '../src/entity/highlight'
 import { Label } from '../src/entity/label'
-import { Subscription } from '../src/entity/subscription'
-import { AppDataSource } from '../src/server'
-import { getRepository, setClaims } from '../src/entity/utils'
+import { LibraryItem } from '../src/entity/library_item'
+import { Reminder } from '../src/entity/reminder'
+import { User } from '../src/entity/user'
+import { UserDeviceToken } from '../src/entity/user_device_tokens'
+import { authTrx, getRepository, setClaims } from '../src/repository'
+import { highlightRepository } from '../src/repository/highlight'
+import { userRepository } from '../src/repository/user'
 import { createUser } from '../src/services/create_user'
-import { SnakeNamingStrategy } from 'typeorm-naming-strategies'
-import { SubscriptionStatus } from '../src/generated/graphql'
-import { Integration } from '../src/entity/integration'
-import { FindOptionsWhere } from 'typeorm'
-
-const runMigrations = async () => {
-  const migrationDirectory = __dirname + '/../../db/migrations'
-  console.log(
-    'running migrations from',
-    migrationDirectory,
-    'into database',
-    process.env.PG_DB
-  )
-
-  const postgrator = new Postgrator({
-    migrationDirectory: migrationDirectory,
-    driver: 'pg',
-    host: process.env.PG_HOST,
-    port: process.env.PG_PORT,
-    username: process.env.PG_USER,
-    password: process.env.PG_PASSWORD,
-    database: process.env.PG_DB,
-    schemaTable: 'schemaversion',
-    validateChecksums: true,
-  })
-
-  const migrations = await postgrator.migrate('max')
-  for (const migration of migrations) {
-    console.log(` - ${migration.action} ${migration.name}`)
-  }
-}
+import { createOrUpdateLibraryItem } from '../src/services/library_item'
+import { createDeviceToken } from '../src/services/user_device_tokens'
+import {
+  bulkEnqueueUpdateLabels,
+  enqueueUpdateHighlight,
+} from '../src/utils/createTask'
+import { generateFakeUuid, waitUntilJobsDone } from './util'
 
 export const createTestConnection = async (): Promise<void> => {
-  // need to manually run migrations before creating the connection
-  // await runMigrations()
-
-  AppDataSource.setOptions({
+  appDataSource.setOptions({
     type: 'postgres',
     host: process.env.PG_HOST,
     port: Number(process.env.PG_PORT),
@@ -58,15 +32,28 @@ export const createTestConnection = async (): Promise<void> => {
     logging: ['query', 'info'],
     entities: [__dirname + '/../src/entity/**/*{.js,.ts}'],
     subscribers: [__dirname + '/../src/events/**/*{.js,.ts}'],
-    namingStrategy: new SnakeNamingStrategy(),
+    logger: process.env.PG_LOGGER as
+      | 'advanced-console'
+      | 'simple-console'
+      | 'file'
+      | 'debug'
+      | undefined,
   })
-  await AppDataSource.initialize()
+  await appDataSource.initialize()
 }
 
-export const deleteTestUser = async (userId: string) => {
-  await AppDataSource.transaction(async (t) => {
+export const deleteFiltersFromUser = async (userId: string) => {
+  await appDataSource.transaction(async (t) => {
     await setClaims(t, userId)
-    await t.getRepository(User).delete(userId)
+    const filterRepo = t.getRepository(Filter)
+
+    const userFilters = await filterRepo.findBy({ user: { id: userId } })
+
+    await Promise.all(
+      userFilters.map((filter) => {
+        return filterRepo.delete(filter.id)
+      })
+    )
   })
 }
 
@@ -92,37 +79,11 @@ export const createTestUser = async (
 }
 
 export const createUserWithoutProfile = async (name: string): Promise<User> => {
-  return getRepository(User).save({
+  return userRepository.save({
     source: 'GOOGLE',
     sourceUserId: 'fake-user-id-' + name,
     email: `${name}@omnivore.app`,
     name: name,
-  })
-}
-
-export const getProfile = async (user: User): Promise<Profile | null> => {
-  return getRepository(Profile).findOneBy({ user: { id: user.id } })
-}
-
-export const createTestPage = async (): Promise<Page> => {
-  return getRepository(Page).save({
-    originalHtml: 'html',
-    content: 'Test content',
-    description: 'Test description',
-    title: 'Test title',
-    author: 'Test author',
-    url: 'Test url',
-    hash: 'Test hash',
-  })
-}
-
-export const createTestLink = async (user: User, page: Page): Promise<Link> => {
-  return getRepository(Link).save({
-    user: user,
-    page: page,
-    slug: 'Test slug',
-    articleUrl: 'Test url',
-    articleHash: 'Test hash',
   })
 }
 
@@ -141,107 +102,99 @@ export const getReminder = async (id: string): Promise<Reminder | null> => {
   return getRepository(Reminder).findOneBy({ id })
 }
 
-export const createTestNewsletterEmail = async (
-  user: User,
-  emailAddress?: string,
-  confirmationCode?: string
-): Promise<NewsletterEmail> => {
-  return getRepository(NewsletterEmail).save({
-    user: user,
-    address: emailAddress,
-    confirmationCode: confirmationCode,
-  })
-}
-
-export const getNewsletterEmail = async (
-  id: string
-): Promise<NewsletterEmail | null> => {
-  return getRepository(NewsletterEmail).findOneBy({ id })
-}
-
 export const createTestDeviceToken = async (
   user: User
 ): Promise<UserDeviceToken> => {
-  return getRepository(UserDeviceToken).save({
-    user: user,
-    token: 'Test token',
-  })
+  return createDeviceToken(user.id, 'fake-token')
 }
 
-export const getDeviceToken = async (
-  id: string
-): Promise<UserDeviceToken | null> => {
-  return getRepository(UserDeviceToken).findOneBy({ id })
-}
-
-export const getUser = async (id: string): Promise<User | null> => {
-  return getRepository(User).findOneBy({ id })
-}
-
-export const getLink = async (id: string): Promise<Link | null> => {
-  return getRepository(Link).findOneBy({ id })
-}
-
-export const createTestLabel = async (
-  user: User,
-  name: string,
-  color: string
-): Promise<Label> => {
-  return getRepository(Label).save({
-    user,
-    name,
-    color,
-  })
-}
-
-export const createTestSubscription = async (
-  user: User,
-  name: string,
-  newsletterEmail?: NewsletterEmail,
-  status = SubscriptionStatus.Active
-): Promise<Subscription> => {
-  const subscription = new Subscription()
-  subscription.user = user
-  subscription.name = name
-  newsletterEmail && (subscription.newsletterEmail = newsletterEmail)
-  subscription.status = status
-
-  return getRepository(Subscription).save(subscription)
-}
-
-export const deleteTestLabels = async (
+export const createTestLibraryItem = async (
   userId: string,
-  criteria: string[] | FindOptionsWhere<Label>
-) => {
-  await AppDataSource.transaction(async (t) => {
-    await setClaims(t, userId)
-    await t.getRepository(Label).delete(criteria)
-  })
+  labels?: Label[]
+): Promise<LibraryItem> => {
+  const item = {
+    user: { id: userId },
+    title: 'test title',
+    originalUrl: `https://blog.omnivore.app/test-url-${generateFakeUuid()}`,
+    slug: 'test-with-omnivore',
+  }
+
+  const createdItem = await createOrUpdateLibraryItem(
+    item,
+    userId,
+    undefined,
+    true
+  )
+  if (labels) {
+    await saveLabelsInLibraryItem(labels, createdItem.id, userId)
+  }
+
+  return createdItem
 }
 
-export const deleteTestIntegrations = async (
+export const saveLabelsInLibraryItem = async (
+  labels: Label[],
+  libraryItemId: string,
   userId: string,
-  criteria: string[] | FindOptionsWhere<Integration>
+  source: LabelSource = 'user'
 ) => {
-  await AppDataSource.transaction(async (t) => {
-    await setClaims(t, userId)
-    await t.getRepository(Integration).delete(criteria)
-  })
+  await authTrx(
+    async (tx) => {
+      const repo = tx.getRepository(EntityLabel)
+
+      // delete existing labels
+      await repo.delete({
+        libraryItemId,
+      })
+
+      // save new labels
+      await repo.save(
+        labels.map((l) => ({
+          labelId: l.id,
+          libraryItemId,
+          source,
+        }))
+      )
+    },
+    {
+      uid: userId,
+    }
+  )
+
+  // update labels in library item
+  const jobs = await bulkEnqueueUpdateLabels([{ libraryItemId, userId }])
+
+  await waitUntilJobsDone(jobs)
 }
 
-export const updateTestUser = async (userId: string, update: Partial<User>) => {
-  await AppDataSource.transaction(async (t) => {
-    await setClaims(t, userId)
-    await t.getRepository(User).update(userId, update)
-  })
-}
-
-export const deleteTestDeviceTokens = async (
-  userId: string,
-  criteria: string[] | FindOptionsWhere<UserDeviceToken>
+export const createHighlight = async (
+  highlight: DeepPartial<Highlight>,
+  libraryItemId: string,
+  userId: string
 ) => {
-  await AppDataSource.transaction(async (t) => {
-    await setClaims(t, userId)
-    await t.getRepository(UserDeviceToken).delete(criteria)
+  const newHighlight = await authTrx(
+    async (tx) => {
+      const repo = tx.withRepository(highlightRepository)
+      const newHighlight = await repo.createAndSave(highlight)
+      return repo.findOneOrFail({
+        where: { id: newHighlight.id },
+        relations: {
+          user: true,
+        },
+      })
+    },
+    {
+      uid: userId,
+    }
+  )
+
+  const job = await enqueueUpdateHighlight({
+    libraryItemId,
+    userId,
   })
+  if (job) {
+    await waitUntilJobsDone([job])
+  }
+
+  return newHighlight
 }

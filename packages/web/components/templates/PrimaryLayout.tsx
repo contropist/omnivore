@@ -1,16 +1,18 @@
 import { PageMetaData, PageMetaDataProps } from '../patterns/PageMetaData'
 import { Box } from '../elements/LayoutPrimitives'
 import { ReactNode, useEffect, useState, useCallback } from 'react'
-import { useGetViewerQuery } from '../../lib/networking/queries/useGetViewerQuery'
-import { navigationCommands } from '../../lib/keyboardShortcuts/navigationShortcuts'
 import { useKeyboardShortcuts } from '../../lib/keyboardShortcuts/useKeyboardShortcuts'
 import { useRouter } from 'next/router'
 import { ConfirmationModal } from '../patterns/ConfirmationModal'
 import { KeyboardShortcutListModal } from './KeyboardShortcutListModal'
-import { logoutMutation } from '../../lib/networking/mutations/logoutMutation'
 import { setupAnalytics } from '../../lib/analytics'
 import { primaryCommands } from '../../lib/keyboardShortcuts/navigationShortcuts'
-import { applyStoredTheme } from '../../lib/themeUpdater'
+import { useLogout } from '../../lib/logout'
+import { useApplyLocalTheme } from '../../lib/hooks/useApplyLocalTheme'
+import { updateTheme } from '../../lib/themeUpdater'
+import { Priority, useRegisterActions } from 'kbar'
+import { ThemeId } from '../tokens/stitches.config'
+import { useGetViewer } from '../../lib/networking/viewer/useGetViewer'
 
 type PrimaryLayoutProps = {
   children: ReactNode
@@ -22,15 +24,13 @@ type PrimaryLayoutProps = {
 }
 
 export function PrimaryLayout(props: PrimaryLayoutProps): JSX.Element {
-  applyStoredTheme(false)
+  useApplyLocalTheme()
 
-  const { viewerData } = useGetViewerQuery()
+  const { data: viewerData } = useGetViewer()
   const router = useRouter()
   const [showLogoutConfirmation, setShowLogoutConfirmation] = useState(false)
   const [showKeyboardCommandsModal, setShowKeyboardCommandsModal] =
     useState(false)
-
-  useKeyboardShortcuts(navigationCommands(router))
 
   useKeyboardShortcuts(
     primaryCommands((action) => {
@@ -42,29 +42,44 @@ export function PrimaryLayout(props: PrimaryLayoutProps): JSX.Element {
     })
   )
 
+  useRegisterActions(
+    [
+      {
+        id: 'home',
+        section: 'Navigation',
+        name: 'Go to Home (Library) ',
+        shortcut: ['g h'],
+        keywords: 'go home',
+        perform: () => router?.push('/home'),
+      },
+      {
+        id: 'lightTheme',
+        section: 'Preferences',
+        name: 'Change theme (light) ',
+        shortcut: ['v', 'l'],
+        keywords: 'light theme',
+        priority: Priority.LOW,
+        perform: () => updateTheme(ThemeId.Light),
+      },
+      {
+        id: 'darkTheme',
+        section: 'Preferences',
+        name: 'Change theme (dark) ',
+        shortcut: ['v', 'd'],
+        keywords: 'dark theme',
+        priority: Priority.LOW,
+        perform: () => updateTheme(ThemeId.Dark),
+      },
+    ],
+    [router]
+  )
+
   // Attempt to identify the user if they are logged in.
   useEffect(() => {
-    setupAnalytics(viewerData?.me)
-
-    const user = window.analytics?.user().id()
-    if (!user && viewerData?.me?.id) {
-      window.analytics?.identify({ userId: viewerData?.me?.id })
+    if (viewerData) {
+      setupAnalytics(viewerData)
     }
-  }, [viewerData?.me])
-
-  async function logout(): Promise<void> {
-    await logoutMutation()
-    try {
-      const result = await logoutMutation()
-      if (!result) {
-        throw new Error('Logout failed')
-      }
-      router.push('/login')
-    } catch {
-      // TODO: display an error message instead
-      router.push('/')
-    }
-  }
+  }, [viewerData])
 
   const showLogout = useCallback(() => {
     setShowLogoutConfirmation(true)
@@ -77,6 +92,8 @@ export function PrimaryLayout(props: PrimaryLayoutProps): JSX.Element {
       document.removeEventListener('logout', showLogout)
     }
   }, [showLogout])
+
+  const { logout } = useLogout()
 
   return (
     <>

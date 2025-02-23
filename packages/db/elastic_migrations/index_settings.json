@@ -131,6 +131,9 @@
           "html": {
             "type": "text",
             "analyzer": "strip_html_analyzer"
+          },
+          "color": {
+            "type": "keyword"
           }
         }
       },
@@ -156,6 +159,10 @@
         "type": "search_as_you_type"
       },
       "subscription": {
+        "type": "keyword",
+        "normalizer": "lowercase_normalizer"
+      },
+      "rssFeedUrl": {
         "type": "keyword",
         "normalizer": "lowercase_normalizer"
       },

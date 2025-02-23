@@ -1,40 +1,45 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-import express from 'express'
-import { sendEmail } from '../utils/sendEmail'
-import { env } from '../env'
-import { buildLogger } from '../utils/logger'
-import { getRepository } from '../entity/utils'
-import { User } from '../entity/user'
-import { getClaimsByToken } from '../utils/auth'
-import { corsConfig } from '../utils/corsConfig'
 import cors from 'cors'
-
-const logger = buildLogger('app.dispatch')
+import express from 'express'
+import { env } from '../env'
+import { userRepository } from '../repository/user'
+import { getClaimsByToken, getTokenByRequest } from '../utils/auth'
+import { corsConfig } from '../utils/corsConfig'
+import { logger } from '../utils/logger'
+import { sendEmail } from '../utils/sendEmail'
 
 export function userRouter() {
   const router = express.Router()
 
   router.post('/email', cors<express.Request>(corsConfig), async (req, res) => {
     logger.info('email to-user router')
-    const token = req?.cookies?.auth || req?.headers?.authorization
-    const claims = await getClaimsByToken(token)
-    if (!claims) {
-      res.status(401).send('UNAUTHORIZED')
-      return
+    const token = getTokenByRequest(req)
+
+    let claims
+    try {
+      claims = await getClaimsByToken(token)
+      if (!claims) {
+        logger.info('failed to authorize')
+        return res.status(401).send('UNAUTHORIZED')
+      }
+    } catch (e) {
+      logger.info('failed to authorize', e)
+      return res.status(401).send('UNAUTHORIZED')
     }
+
     const from = env.sender.message
     const { body, subject } = req.body as {
       body?: string
       subject?: string
     }
     if (!subject || !body || !from) {
-      console.log(subject, body, from)
+      logger.error('Bad Request', { subject, body, from })
       res.status(400).send('Bad Request')
       return
     }
     try {
-      const user = await getRepository(User).findOneBy({ id: claims.uid })
+      const user = await userRepository.findById(claims.uid)
       if (!user) {
         res.status(400).send('Bad Request')
         return

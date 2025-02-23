@@ -7,52 +7,30 @@ import Views
 
 @MainActor final class LinkItemDetailViewModel: ObservableObject {
   @Published var pdfItem: PDFItem?
-  @Published var item: LinkedItem?
+  @Published var item: Models.LibraryItem?
 
   func loadItem(linkedItemObjectID: NSManagedObjectID, dataService: DataService) async {
     let item = await dataService.viewContext.perform {
-      dataService.viewContext.object(with: linkedItemObjectID) as? LinkedItem
+      dataService.viewContext.object(with: linkedItemObjectID) as? Models.LibraryItem
     }
 
     if let item = item {
       pdfItem = PDFItem.make(item: item)
       self.item = item
+      trackReadEvent(reader: item.isPDF ? "PDF" : "WEB")
     }
-
-    trackReadEvent()
   }
 
-  func handleArchiveAction(dataService: DataService) {
-    guard let objectID = item?.objectID ?? pdfItem?.objectID else { return }
-    dataService.archiveLink(objectID: objectID, archived: !isItemArchived)
-    showInSnackbar(!isItemArchived ? "Link archived" : "Link moved to Inbox")
-  }
-
-  func handleDeleteAction(dataService: DataService) {
-    guard let objectID = item?.objectID ?? pdfItem?.objectID else { return }
-    showInSnackbar("Link removed")
-    dataService.removeLink(objectID: objectID)
-  }
-
-  func updateItemReadStatus(dataService: DataService) {
-    guard let itemID = item?.unwrappedID ?? pdfItem?.itemID else { return }
-
-    dataService.updateLinkReadingProgress(
-      itemID: itemID,
-      readingProgress: isItemRead ? 0 : 100,
-      anchorIndex: 0
-    )
-  }
-
-  private func trackReadEvent() {
+  private func trackReadEvent(reader: String) {
     guard let itemID = item?.unwrappedID ?? pdfItem?.itemID else { return }
     guard let slug = item?.unwrappedSlug ?? pdfItem?.slug else { return }
-    guard let originalArticleURL = item?.unwrappedPageURLString ?? pdfItem?.originalArticleURL else { return }
+    guard let originalArticleURL = item?.unwrappedPageURLString ?? pdfItem?.downloadURL else { return }
 
     EventTracker.track(
       .linkRead(
         linkID: itemID,
         slug: slug,
+        reader: reader,
         originalArticleURL: originalArticleURL
       )
     )
@@ -70,126 +48,36 @@ import Views
 struct LinkItemDetailView: View {
   @EnvironmentObject var authenticator: Authenticator
   @EnvironmentObject var dataService: DataService
-  @Environment(\.presentationMode) var presentationMode: Binding<PresentationMode>
 
-  static let navBarHeight = 50.0
   let linkedItemObjectID: NSManagedObjectID
   let isPDF: Bool
 
   @StateObject private var viewModel = LinkItemDetailViewModel()
-  @State private var showFontSizePopover = false
-  @State private var showTitleEdit = false
-  @State private var navBarVisibilityRatio = 1.0
-  @State private var showDeleteConfirmation = false
+
+  @State var isEnabled = true
+  @Environment(\.dismiss) var dismiss
 
   init(linkedItemObjectID: NSManagedObjectID, isPDF: Bool) {
     self.linkedItemObjectID = linkedItemObjectID
     self.isPDF = isPDF
   }
 
-  var toggleReadStatusToolbarItem: some View {
-    Button(
-      action: {
-        viewModel.updateItemReadStatus(dataService: dataService)
-      },
-      label: {
-        Image(systemName: viewModel.isItemRead ? "line.horizontal.3.decrease.circle" : "checkmark.circle")
-      }
-    )
-  }
-
-  var removeLinkToolbarItem: some View {
-    Button(
-      action: { print("delete item action") },
-      label: {
-        Image(systemName: "trash")
-      }
-    )
-  }
-
   var body: some View {
-    ZStack { // Using ZStack so .task can be used on if/else body
+    Group {
       if isPDF {
-        pdfContainerView
+        NavigationView {
+          pdfContainerView
+            .navigationBarBackButtonHidden(false)
+        }
+        .navigationViewStyle(.stack)
       } else if let item = viewModel.item {
         WebReaderContainerView(item: item)
+          .background(ThemeManager.currentBgColor)
       }
     }
+    .ignoresSafeArea(.all, edges: .bottom)
     .task {
       await viewModel.loadItem(linkedItemObjectID: linkedItemObjectID, dataService: dataService)
-    }
-    #if os(iOS)
-      .navigationBarHidden(true)
-    #endif
-  }
-
-  var navBar: some View {
-    HStack(alignment: .center) {
-      Button(
-        action: { self.presentationMode.wrappedValue.dismiss() },
-        label: {
-          Image(systemName: "chevron.backward")
-            .font(.appNavbarIcon)
-            .foregroundColor(.appGrayTextContrast)
-            .padding(.horizontal)
-        }
-      )
-      .scaleEffect(navBarVisibilityRatio)
-      Spacer()
-      Button(
-        action: { showFontSizePopover.toggle() },
-        label: {
-          Image(systemName: "textformat.size")
-            .font(.appTitleTwo)
-        }
-      )
-      .padding(.horizontal)
-      .scaleEffect(navBarVisibilityRatio)
-      Menu(
-        content: {
-          Group {
-            Button(
-              action: { showTitleEdit = true },
-              label: { Label("Edit Info", systemImage: "info.circle") }
-            )
-            Button(
-              action: { viewModel.handleArchiveAction(dataService: dataService) },
-              label: {
-                Label(
-                  viewModel.isItemArchived ? "Unarchive" : "Archive",
-                  systemImage: viewModel.isItemArchived ? "tray.and.arrow.down.fill" : "archivebox"
-                )
-              }
-            )
-            Button(
-              action: { showDeleteConfirmation = true },
-              label: { Label("Delete", systemImage: "trash") }
-            )
-          }
-        },
-        label: {
-          Image(systemName: "ellipsis")
-            .padding(.horizontal)
-            .scaleEffect(navBarVisibilityRatio)
-        }
-      )
-    }
-    .frame(height: readerViewNavBarHeight * navBarVisibilityRatio)
-    .opacity(navBarVisibilityRatio)
-    .background(Color.systemBackground)
-    .onTapGesture {
-      showFontSizePopover = false
-    }
-    .alert("Are you sure?", isPresented: $showDeleteConfirmation) {
-      Button("Remove Link", role: .destructive) {
-        viewModel.handleDeleteAction(dataService: dataService)
-      }
-      Button(LocalText.cancelGeneric, role: .cancel, action: {})
-    }
-    .sheet(isPresented: $showTitleEdit) {
-      if let item = viewModel.item {
-        LinkedItemMetadataEditView(item: item)
-      }
     }
   }
 
@@ -210,17 +98,3 @@ struct LinkItemDetailView: View {
     }
   }
 }
-
-#if os(iOS)
-  // Enable swipe to go back behavior if nav bar is hidden
-  extension UINavigationController: UIGestureRecognizerDelegate {
-    override open func viewDidLoad() {
-      super.viewDidLoad()
-      interactivePopGestureRecognizer?.delegate = self
-    }
-
-    public func gestureRecognizerShouldBegin(_: UIGestureRecognizer) -> Bool {
-      viewControllers.count > 1
-    }
-  }
-#endif

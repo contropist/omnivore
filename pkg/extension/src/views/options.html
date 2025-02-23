@@ -1,14 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>API Key Storage</title>
+  <title>Omnivore Extension Settings</title>
   <script src="/scripts/common.js"></script>
-  <style>
-    div.wrapper: {
-      max-width: 480px;
-      padding: 20px;
-    }
-  </style>
+
 </head>
 <body>
   <div class='wrapper'>
@@ -23,7 +18,7 @@
 
     <p>To do this, create an API key at 
       <a href='https://omnivore.app/settings/api'>omnivore.app/settings/api</a>,
-      paste it into the textboix below, and choose 'Save API Key'.
+      paste it into the textbox below, and choose 'Save API Key'.
     </p>
     
     <p></p>
@@ -35,6 +30,60 @@
     <button id="save-api-key-btn">Save API Key</button>
     <button id="load-api-key-btn">Load API Key</button>
     <button id="clear-api-key-btn">Clear API Key</button>
+
+    <p>&nbsp;</p>
+
+    <h1>API URL</h1>
+    <p>For users self hosting their own instance of Omnivore, you can set the API URL here.
+      Note this should be the URL of the graphql endpoint, not the webserver.
+    </p>
+
+    <p>
+    For example, if you are running the Omnivore API at <a href="">https://api-omnivore.mydomain.com</a>,
+    the API URL would be <a href="">https://api-omnivore.mydomain.com/api</a>.
+    </p>
+
+    <label for="api-url">API URL:</label>
+    <input type="text" id="api-url">
+    <br><br>
+    <button id="save-api-url-btn">Save API URL</button>
+    <button id="load-api-url-btn">Load API URL</button>
+    <button id="clear-api-url-btn">Clear API URL</button>
+    <p>&nbsp;</p>
+
+    <h1>Settings</h1>
+
+    <p>
+      <input type="checkbox" id="disable-auto-dismiss" />
+      <label for="auto-dismiss">Disable Auto Dismiss</label>
+    </p>
+
+    <p>
+      <label for="auto-dismiss-time">Auto Dismiss time (ms)</label>
+      <input type="text" id="auto-dismiss-time" />
+      <button id="auto-dismiss-time-btn">Save</button>
+    </p>
+
+    <p>&nbsp;</p>
+
+    <h1>Privacy</h1>
+    <p class="consent-text">To function Omnivore needs to collect some data. This data is used to authenticate you with our servers, and save pages to your library.</p>
+    
+
+    <p class="consent-text">Omnivore uses the following data:</p>
+    <ul>
+      <li><b>Tab Data</b>: When you invoke the extension, we access the content of the page you are currently viewing. This allows us to save the full content of the page, exactly how you are viewing it. That data is then transmitted to our servers and added to your library</li>
+      <li><b>Authentication cookie</b>: When you invoke the extension we access the auth cookie you used to authenticate at <a href="https://omnivore.app">https://omnivore.app</a>. This cookie identifies you as an Omnivore user and ties the saving operation to your Omnivore account.</li>
+    </ul>
+    <p class="consent-text">For full details about the data we collect you can read our <a href="https://docs.omnivore.app/about/privacy-statement.html">privacy statement</a></p>
+
+    <label for="consent-checkbox">
+        <input type="checkbox" id="consent-checkbox"> I consent to data collection
+    </label>
+
+    <button id="consent-button" onclick="handleConsent()">Save</button>
+
+    <p>&nbsp;</p>
   </div>
   <script src="/scripts/options.js"></script>
 </body>

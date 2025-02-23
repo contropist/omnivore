@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-base-to-string */
+
 import { preParseContent } from '@omnivore/content-handler'
 import { Readability } from '@omnivore/readability'
 import addressparser from 'addressparser'
@@ -12,15 +14,19 @@ import * as jwt from 'jsonwebtoken'
 import { parseHTML } from 'linkedom'
 import { NodeHtmlMarkdown, TranslatorConfigObject } from 'node-html-markdown'
 import { ElementNode } from 'node-html-markdown/dist/nodes'
+import Parser from 'rss-parser'
+import { parser } from 'sax'
+import showdown from 'showdown'
 import { ILike } from 'typeorm'
 import { promisify } from 'util'
 import { v4 as uuid } from 'uuid'
-import { Highlight } from '../elastic/types'
-import { User } from '../entity/user'
-import { getRepository } from '../entity/utils'
+import { Highlight, HighlightType } from '../entity/highlight'
+import { StatusType } from '../entity/user'
 import { env } from '../env'
 import { PageType, PreparedDocumentInput } from '../generated/graphql'
+import { userRepository } from '../repository/user'
 import { ArticleFormat } from '../resolvers/article'
+import { generateFingerprint } from './helpers'
 import {
   EmbeddedHighlightData,
   findEmbeddedHighlight,
@@ -29,10 +35,26 @@ import {
   makeHighlightNodeAttributes,
 } from './highlightGenerator'
 import { createImageProxyUrl } from './imageproxy'
-import { buildLogger, LogRecord } from './logger'
+import { logger, LogRecord } from './logger'
 
-const logger = buildLogger('utils.parse')
+interface Feed {
+  title: string
+  url: string
+  type: string
+  thumbnail?: string
+  description?: string
+}
+
 const signToken = promisify(jwt.sign)
+
+const axiosInstance = axios.create({
+  timeout: 5000,
+  headers: {
+    'User-Agent': 'Mozilla/5.0',
+    Accept: 'text/html',
+  },
+  responseType: 'text',
+})
 
 export const ALLOWED_CONTENT_TYPES = [
   'text/html',
@@ -56,6 +78,18 @@ const DOM_PURIFY_CONFIG = {
 const ARTICLE_PREFIX = 'omnivore:'
 
 export const FAKE_URL_PREFIX = 'https://omnivore.app/no_url?q='
+export const rssParserConfig = () => {
+  const fingerprint = generateFingerprint()
+
+  return {
+    headers: {
+      'user-agent': fingerprint.headers['user-agent'],
+      accept:
+        'application/rss+xml, application/rdf+xml;q=0.8, application/atom+xml;q=0.6, application/xml;q=0.4, text/xml;q=0.4, text/html;q=0.2',
+    },
+    timeout: 20000, // 20 seconds
+  }
+}
 
 /** Hook that prevents DOMPurify from removing youtube iframes */
 const domPurifySanitizeHook = (
@@ -151,7 +185,7 @@ const getPurifiedContent = (html: string): Document => {
 const getReadabilityResult = async (
   url: string,
   html: string,
-  document: Document,
+  document?: Document,
   isNewsletter?: boolean
 ): Promise<Readability.ParseResult | null> => {
   // First attempt to read the article as is.
@@ -176,6 +210,7 @@ const getReadabilityResult = async (
         debug: DEBUG_MODE,
         createImageProxyUrl,
         keepTables: isNewsletter,
+        ignoreLinkDensity: isNewsletter,
         url,
       }).parse()
 
@@ -183,7 +218,7 @@ const getReadabilityResult = async (
         return article
       }
     } catch (error) {
-      console.log('parsing error for url', url, error)
+      logger.info('parsing error for url', { url, error })
     }
   }
 
@@ -193,7 +228,6 @@ const getReadabilityResult = async (
 export const parsePreparedContent = async (
   url: string,
   preparedDocument: PreparedDocumentInput,
-  parseResult?: Readability.ParseResult | null,
   isNewsletter?: boolean,
   allowRetry = true
 ): Promise<ParsedContentPuppeteer> => {
@@ -202,10 +236,16 @@ export const parsePreparedContent = async (
     labels: { source: 'parsePreparedContent' },
   }
 
-  // If we have a parse result, use it
-  let article = parseResult || null
-  let highlightData = undefined
-  const { document, pageInfo } = preparedDocument
+  const { document: domContent, pageInfo } = preparedDocument
+  if (!domContent) {
+    logger.info('No document')
+    return {
+      canonicalUrl: url,
+      parsedContent: null,
+      domContent: '',
+      pageType: PageType.Unknown,
+    }
+  }
 
   // Checking for content type acceptance or if there are no contentType
   // at all (backward extension versions compatibility)
@@ -213,150 +253,151 @@ export const parsePreparedContent = async (
     pageInfo.contentType &&
     !ALLOWED_CONTENT_TYPES.includes(pageInfo.contentType)
   ) {
-    console.log('Not allowed content type', pageInfo.contentType)
+    logger.info(`Not allowed content type: ${pageInfo.contentType}`)
     return {
       canonicalUrl: url,
       parsedContent: null,
-      domContent: document,
+      domContent,
       pageType: PageType.Unknown,
     }
   }
 
-  let dom = parseHTML(document).document
+  const { title: pageInfoTitle, canonicalUrl } = pageInfo
+
+  let parsedContent: Readability.ParseResult | null = null
+  let pageType = PageType.Unknown
+  let highlightData = undefined
 
   try {
-    if (!article) {
-      // Attempt to parse the article
-      // preParse content
-      const preParsedDom = await preParseContent(url, dom)
-      preParsedDom && (dom = preParsedDom)
+    const document = parseHTML(domContent).document
+    pageType = parseOriginalContent(document)
 
-      article = await getReadabilityResult(url, document, dom, isNewsletter)
-    }
+    // Run readability
+    await preParseContent(url, document)
 
-    if (!article?.textContent && allowRetry) {
-      const newDocument = {
-        ...preparedDocument,
-        document: '<html>' + document + '</html>',
+    parsedContent = await getReadabilityResult(
+      url,
+      domContent,
+      document,
+      isNewsletter
+    )
+
+    if (!parsedContent || !parsedContent.content) {
+      logger.info('No parsed content')
+
+      if (allowRetry) {
+        logger.info('Retrying with content wrapped in html body')
+
+        const newDocument = {
+          ...preparedDocument,
+          document: '<html><body>' + domContent + '</body></html>', // wrap in body
+        }
+        return parsePreparedContent(url, newDocument, isNewsletter, false)
       }
-      return parsePreparedContent(
-        url,
-        newDocument,
-        parseResult,
-        isNewsletter,
-        false
-      )
+
+      return {
+        canonicalUrl,
+        parsedContent,
+        domContent,
+        pageType,
+      }
     }
 
+    // use title if not found after running readability
+    if (!parsedContent.title && pageInfoTitle) {
+      parsedContent.title = pageInfoTitle
+    }
+
+    const newDocumentElement = parsedContent.documentElement
     // Format code blocks
     // TODO: we probably want to move this type of thing
     // to the handlers, and have some concept of postHandle
-    if (article?.content) {
-      const articleDom = parseHTML(article.content).document
-      const codeBlocks = articleDom.querySelectorAll(
-        'code, pre[class^="prism-"], pre[class^="language-"]'
-      )
-      if (codeBlocks.length > 0) {
-        codeBlocks.forEach((e) => {
-          if (e.textContent) {
-            const att = hljs.highlightAuto(e.textContent)
-            const code = dom.createElement('code')
-            const langClass =
-              `hljs language-${att.language}` +
-              (att.second_best?.language
-                ? ` language-${att.second_best?.language}`
-                : '')
-            code.setAttribute('class', langClass)
-            code.innerHTML = att.value
-            e.replaceWith(code)
-          }
+    const codeBlocks = newDocumentElement.querySelectorAll(
+      'pre[class^="prism-"], pre[class^="language-"], code'
+    )
+    codeBlocks.forEach((e) => {
+      if (!e.textContent) {
+        return e.parentNode?.removeChild(e)
+      }
+
+      // replace <br> or <p> or </p> with \n
+      e.innerHTML = e.innerHTML.replace(/<(br|p|\/p)>/g, '\n')
+
+      const att = hljs.highlightAuto(e.textContent)
+      const code = document.createElement('code')
+      const langClass =
+        `hljs language-${att.language}` +
+        (att.second_best?.language
+          ? ` language-${att.second_best?.language}`
+          : '')
+      code.setAttribute('class', langClass)
+      code.innerHTML = att.value
+      e.replaceWith(code)
+    })
+
+    highlightData = findEmbeddedHighlight(newDocumentElement)
+
+    const ANCHOR_ELEMENTS_BLOCKED_ATTRIBUTES = [
+      'omnivore-highlight-id',
+      'data-twitter-tweet-id',
+      'data-instagram-id',
+    ]
+
+    // Get the top level element?
+    // const pageNode = newDocumentElement.firstElementChild as HTMLElement
+    const nodesToVisitStack: [HTMLElement] = [newDocumentElement]
+    const visitedNodeList = []
+
+    while (nodesToVisitStack.length > 0) {
+      const currentNode = nodesToVisitStack.pop()
+      if (
+        currentNode?.nodeType !== 1 ||
+        // Avoiding dynamic elements from being counted as anchor-allowed elements
+        ANCHOR_ELEMENTS_BLOCKED_ATTRIBUTES.some((attrib) =>
+          currentNode.hasAttribute(attrib)
+        )
+      ) {
+        continue
+      }
+      visitedNodeList.push(currentNode)
+      ;[].slice
+        .call(currentNode.childNodes)
+        .reverse()
+        .forEach(function (node) {
+          nodesToVisitStack.push(node)
         })
-        article.content = articleDom.documentElement.outerHTML
-      }
-
-      highlightData = findEmbeddedHighlight(articleDom.documentElement)
-
-      const ANCHOR_ELEMENTS_BLOCKED_ATTRIBUTES = [
-        'omnivore-highlight-id',
-        'data-twitter-tweet-id',
-        'data-instagram-id',
-      ]
-
-      // Get the top level element?
-      const pageNode = articleDom.firstElementChild as HTMLElement
-      const nodesToVisitStack: [HTMLElement] = [pageNode]
-      const visitedNodeList = []
-
-      while (nodesToVisitStack.length > 0) {
-        const currentNode = nodesToVisitStack.pop()
-        if (
-          currentNode?.nodeType !== 1 ||
-          // Avoiding dynamic elements from being counted as anchor-allowed elements
-          ANCHOR_ELEMENTS_BLOCKED_ATTRIBUTES.some((attrib) =>
-            currentNode.hasAttribute(attrib)
-          )
-        ) {
-          continue
-        }
-        visitedNodeList.push(currentNode)
-        ;[].slice
-          .call(currentNode.childNodes)
-          .reverse()
-          .forEach(function (node) {
-            nodesToVisitStack.push(node)
-          })
-      }
-
-      visitedNodeList.shift()
-      visitedNodeList.forEach((node, index) => {
-        // start from index 1, index 0 reserved for anchor unknown.
-        node.setAttribute('data-omnivore-anchor-idx', (index + 1).toString())
-      })
-
-      article.content = articleDom.documentElement.outerHTML
     }
 
+    visitedNodeList.shift()
+    visitedNodeList.forEach((node, index) => {
+      // start from index 1, index 0 reserved for anchor unknown.
+      node.setAttribute('data-omnivore-anchor-idx', (index + 1).toString())
+    })
+
+    const newHtml = newDocumentElement.outerHTML
     const newWindow = parseHTML('')
     const DOMPurify = createDOMPurify(newWindow)
     DOMPurify.addHook('uponSanitizeElement', domPurifySanitizeHook)
-    const clean = DOMPurify.sanitize(article?.content || '', DOM_PURIFY_CONFIG)
+    const cleanHtml = DOMPurify.sanitize(newHtml, DOM_PURIFY_CONFIG)
+    parsedContent.content = cleanHtml
 
-    const jsonLdLinkMetadata = (async () => {
-      return getJSONLdLinkMetadata(dom)
-    })()
-
-    Object.assign(article || {}, {
-      content: clean,
-      title: article?.title || (await jsonLdLinkMetadata).title,
-      previewImage:
-        article?.previewImage || (await jsonLdLinkMetadata).previewImage,
-      siteName: article?.siteName || (await jsonLdLinkMetadata).siteName,
-      siteIcon: article?.siteIcon,
-      byline: article?.byline || (await jsonLdLinkMetadata).byline,
-      language: article?.language,
-    })
     logRecord.parseSuccess = true
   } catch (error) {
-    console.log('Error parsing content', error)
+    logger.error('Error parsing content', error)
+
     Object.assign(logRecord, {
       parseSuccess: false,
       parseError: error,
     })
   }
 
-  const { title, canonicalUrl } = pageInfo
-
-  Object.assign(article || {}, {
-    title: article?.title || title,
-  })
-
-  logger.info('parse-article completed')
+  logger.info('parse-article completed', logRecord)
 
   return {
-    domContent: document,
-    parsedContent: article,
     canonicalUrl,
-    pageType: parseOriginalContent(dom),
+    parsedContent,
+    domContent,
+    pageType,
     highlightData,
   }
 }
@@ -390,7 +431,7 @@ const getJSONLdLinkMetadata = async (
 
     return result
   } catch (error) {
-    logger.warning(`Unable to get JSONLD link of the article`, { error })
+    logger.error('Unable to get JSONLD link of the article')
     return result
   }
 }
@@ -432,7 +473,7 @@ export const parsePageMetadata = (html: string): Metadata | undefined => {
 
     return { title, author, description, previewImage }
   } catch (e) {
-    console.log('failed to parse page:', html, e)
+    logger.info('failed to parse page:', e)
     return undefined
   }
 }
@@ -443,8 +484,12 @@ export const parseUrlMetadata = async (
   try {
     const res = await axios.get(url)
     return parsePageMetadata(res.data)
-  } catch (e) {
-    console.log('failed to get:', url, e)
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      logger.error(error.response)
+    } else {
+      logger.error(error)
+    }
     return undefined
   }
 }
@@ -453,8 +498,9 @@ export const isProbablyArticle = async (
   email: string,
   subject: string
 ): Promise<boolean> => {
-  const user = await getRepository(User).findOneBy({
+  const user = await userRepository.findOneBy({
     email: ILike(email),
+    status: StatusType.Active,
   })
   return !!user || subject.includes(ARTICLE_PREFIX)
 }
@@ -489,7 +535,11 @@ export const fetchFavicon = async (
     const domain = new URL(realUrl).hostname
     return `https://api.faviconkit.com/${domain}/128`
   } catch (e) {
-    console.log('Error fetching favicon', e)
+    if (axios.isAxiosError(e)) {
+      logger.info('failed to get favicon', e.response)
+    } else {
+      logger.info('failed to get favicon', e)
+    }
     return undefined
   }
 }
@@ -597,10 +647,15 @@ export const contentConverter = (
 ): contentConverterFunc | undefined => {
   switch (format) {
     case ArticleFormat.Markdown:
-      return htmlToMarkdown
+      return (html: string) => {
+        return ''
+      }
+    //      return htmlToMarkdown
     case ArticleFormat.HighlightedMarkdown:
-      return htmlToHighlightedMarkdown
-    case ArticleFormat.Html:
+      return (html: string) => {
+        return ''
+      }
+    //      return htmlToHighlightedMarkdown
     default:
       return undefined
   }
@@ -624,7 +679,7 @@ export const htmlToHighlightedMarkdown = (
       throw new Error('Invalid html content')
     }
   } catch (err) {
-    console.log(err)
+    logger.error(err)
     return nhm.translate(/* html */ html)
   }
 
@@ -635,7 +690,7 @@ export const htmlToHighlightedMarkdown = (
 
   // wrap highlights in special tags
   highlights
-    .filter((h) => h.type == 'HIGHLIGHT' && h.patch)
+    .filter((h) => h.highlightType == 'HIGHLIGHT' && h.patch)
     .forEach((highlight) => {
       try {
         makeHighlightNodeAttributes(
@@ -644,7 +699,7 @@ export const htmlToHighlightedMarkdown = (
           articleTextNodes
         )
       } catch (err) {
-        console.log(err)
+        logger.error(err)
       }
     })
   html = document.documentElement.outerHTML
@@ -656,6 +711,13 @@ export const htmlToMarkdown = (html: string) => {
   return nhm.translate(/* html */ html)
 }
 
+export const markdownToHtml = (markdown: string) => {
+  const converter = new showdown.Converter({
+    backslashEscapesHTMLTags: true,
+  })
+  return converter.makeHtml(markdown)
+}
+
 export const getDistillerResult = async (
   uid: string,
   html: string
@@ -663,14 +725,14 @@ export const getDistillerResult = async (
   try {
     const url = process.env.DISTILLER_URL
     if (!url) {
-      console.log('No distiller url')
+      logger.info('No distiller url')
       return undefined
     }
 
     const exp = Math.floor(Date.now() / 1000) + 60 * 60 // 1 hour
     const auth = (await signToken({ uid, exp }, env.server.jwtSecret)) as string
 
-    console.debug('Parsing by distiller', url)
+    logger.info(`Parsing by distiller: ${url}`)
     const response = await axios.post<string>(url, html, {
       headers: {
         Authorization: auth,
@@ -678,8 +740,152 @@ export const getDistillerResult = async (
       timeout: 5000,
     })
     return response.data
-  } catch (e) {
-    console.log('Error parsing by distiller', e)
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      logger.error(error.response)
+    } else {
+      logger.error(error)
+    }
     return undefined
   }
+}
+
+const fetchHtml = async (url: string): Promise<string | null> => {
+  try {
+    const response = await axiosInstance.get(url)
+    return response.data as string
+  } catch (error) {
+    logger.error('Error fetching html', error)
+    return null
+  }
+}
+
+export const parseOpml = (opml: string): Feed[] | undefined => {
+  const xmlParser = parser(true, { lowercase: true })
+  const feeds: Feed[] = []
+  const existingFeeds = new Map<string, boolean>()
+
+  xmlParser.onopentag = function (node) {
+    if (node.name === 'outline') {
+      // folders also are outlines, make sure an xmlUrl is available
+      const feedUrl = node.attributes.xmlUrl.toString()
+      if (feedUrl && !existingFeeds.has(feedUrl)) {
+        feeds.push({
+          title: node.attributes.title.toString() || '',
+          url: feedUrl,
+          type: node.attributes.type.toString() || 'rss',
+        })
+        existingFeeds.set(feedUrl, true)
+      }
+    }
+  }
+
+  xmlParser.onend = function () {
+    return feeds
+  }
+
+  try {
+    xmlParser.write(opml).close()
+  } catch (error) {
+    logger.error('Error parsing opml', error)
+    return undefined
+  }
+}
+
+export const parseHtml = async (url: string): Promise<Feed[] | undefined> => {
+  // fetch HTML and parse feeds
+  const html = await fetchHtml(url)
+  if (!html) return undefined
+
+  try {
+    const dom = parseHTML(html).document
+    const links = dom.querySelectorAll('link[type="application/rss+xml"]')
+    const feeds = Array.from(links)
+      .map((link) => ({
+        url: link.getAttribute('href') || '',
+        title: link.getAttribute('title') || '',
+        type: 'rss',
+      }))
+      .filter((feed) => feed.url)
+
+    return feeds
+  } catch (error) {
+    logger.error('Error parsing html', error)
+    return undefined
+  }
+}
+
+export const parseFeed = async (
+  url: string,
+  content?: string | null
+): Promise<Feed | null> => {
+  try {
+    // check if url is a telegram channel
+    const telegramRegex = /https:\/\/t\.me\/([a-zA-Z0-9_]+)/
+    const telegramMatch = url.match(telegramRegex)
+    if (telegramMatch) {
+      if (!content) {
+        // fetch HTML and parse feeds
+        content = await fetchHtml(url)
+      }
+
+      if (!content) return null
+
+      const dom = parseHTML(content).document
+      const title = dom.querySelector('meta[property="og:title"]')
+      const thumbnail = dom.querySelector('meta[property="og:image"]')
+      const description = dom.querySelector('meta[property="og:description"]')
+
+      return {
+        title: title?.getAttribute('content') || url,
+        url,
+        type: 'telegram',
+        thumbnail: thumbnail?.getAttribute('content') || '',
+        description: description?.getAttribute('content') || '',
+      }
+    }
+
+    const parser = new Parser(rssParserConfig())
+
+    const feed = content
+      ? await parser.parseString(content)
+      : await parser.parseURL(url)
+
+    const feedUrl = feed.feedUrl || url
+
+    return {
+      title: feed.title || feedUrl,
+      url: feedUrl,
+      thumbnail: feed.image?.url,
+      type: 'rss',
+      description: feed.description,
+    }
+  } catch (error) {
+    logger.error('Error parsing feed', error)
+    return null
+  }
+}
+
+const formatHighlightQuote = (quote: string): string => {
+  // replace all empty lines with blockquote '>' to preserve paragraphs
+  return quote.replace(/^(?=\n)$|^\s*?\n/gm, '> ')
+}
+
+export const highlightToMarkdown = (highlight: Highlight): string => {
+  if (highlight.highlightType === HighlightType.Highlight && highlight.quote) {
+    const quote = formatHighlightQuote(highlight.quote)
+    const labels = highlight.labels?.map((label) => `#${label.name}`).join(' ')
+    const note = highlight.annotation
+    return `> ${quote} ${labels ? `\n\n${labels}` : ''}${
+      note ? `\n\n${note}` : ''
+    }`
+  } else if (
+    highlight.highlightType == HighlightType.Note &&
+    highlight.annotation
+  ) {
+    const note = highlight.annotation
+    return `${note}\n\n`
+  }
+
+  return ''
 }

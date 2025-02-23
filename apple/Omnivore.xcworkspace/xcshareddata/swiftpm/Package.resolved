@@ -10,15 +10,6 @@
       }
     },
     {
-      "identity" : "analytics-swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/segmentio/analytics-swift.git",
-      "state" : {
-        "revision" : "92cc824211160ab98c28c7d40c1e6d27645c2bf1",
-        "version" : "1.2.3"
-      }
-    },
-    {
       "identity" : "appauth-ios",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openid/AppAuth-iOS.git",
@@ -34,6 +25,15 @@
       "state" : {
         "revision" : "79db6516894a932d0ddaff3b05b9da1e4f6c4069",
         "version" : "0.9.0"
+      }
+    },
+    {
+      "identity" : "engine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/nathantannar4/Engine",
+      "state" : {
+        "revision" : "391d0da0282f51327b5d2c0e5de64f75e59cbae7",
+        "version" : "1.8.3"
       }
     },
     {
@@ -122,8 +122,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/intercom/intercom-ios",
       "state" : {
-        "revision" : "3345d9e7599141d7c844981423a7e5409f2bfb81",
-        "version" : "11.1.2"
+        "revision" : "ad789a51b350dffe804dbf083430e0d6e91ac4af",
+        "version" : "17.1.2"
       }
     },
     {
@@ -145,6 +145,15 @@
       }
     },
     {
+      "identity" : "posthog-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/PostHog/posthog-ios.git",
+      "state" : {
+        "revision" : "3a6afc24d6bde730a19470d4e6b713f44d076ad9",
+        "version" : "2.0.3"
+      }
+    },
+    {
       "identity" : "promises",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/google/promises.git",
@@ -158,17 +167,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/PSPDFKit/PSPDFKit-SP",
       "state" : {
-        "revision" : "f4ba9790488b8f11c29cff35943e430efcdb8003",
-        "version" : "12.0.1"
-      }
-    },
-    {
-      "identity" : "sovran-swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/segmentio/Sovran-Swift.git",
-      "state" : {
-        "revision" : "944c17d7c46bd95fc37f09136cabd172be5b413b",
-        "version" : "1.0.3"
+        "revision" : "fff37620437d93571e38675440da5257ff4a9fd5",
+        "version" : "13.7.0"
       }
     },
     {
@@ -208,12 +208,21 @@
       }
     },
     {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-syntax.git",
+      "state" : {
+        "revision" : "6ad4ea24b01559dde0773e3d091f1b9e36175036",
+        "version" : "509.0.2"
+      }
+    },
+    {
       "identity" : "swiftformat",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/nicklockwood/SwiftFormat",
       "state" : {
-        "revision" : "872e7034f54aeee3f20acf790ecc13e1383f7360",
-        "version" : "0.48.4"
+        "revision" : "fef156a6135e584985ed26713dd2e9ee41f952cb",
+        "version" : "0.53.0"
       }
     },
     {
@@ -223,6 +232,24 @@
       "state" : {
         "revision" : "f2616860a41f9d9932da412a8978fec79c06fe24",
         "version" : "0.1.4"
+      }
+    },
+    {
+      "identity" : "transmission",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/nathantannar4/Transmission",
+      "state" : {
+        "revision" : "9cbf1f6fec330e25c615182f3de483b129576819",
+        "version" : "1.3.2"
+      }
+    },
+    {
+      "identity" : "turbocharger",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/nathantannar4/Turbocharger",
+      "state" : {
+        "revision" : "9420e40f902021469ee7b4c5a0c7849f5bb26290",
+        "version" : "1.3.1"
       }
     },
     {

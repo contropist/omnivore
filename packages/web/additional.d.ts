@@ -13,9 +13,10 @@ declare global {
     // eslint-disable-next-line @typescript-eslint/ban-types
     Intercom: Function
     intercomSettings: IntercomSettings
-    analytics?: Analytics
     AndroidWebKitMessenger?: AndroidWebKitMessenger
     themeKey?: string
+    twttr?: EmbedTweetWidget
+    tiktokEmbed?: EmbedTiktokWidget
   }
 }
 
@@ -42,4 +43,17 @@ interface IntercomSettings {
   hide_default_launcher: boolean
   vertical_padding: number
   custom_launcher_selector: string
+}
+
+export interface EmbedTweetWidget {
+  widgets: {
+    createTweet: (string, HTMLElement, unknown) => void
+  }
+  [key: string]: string | { createTweet: unknown }
+}
+
+export interface EmbedTiktokWidget {
+  lib: {
+    render: (tiktoksOnPage) => void
+  }
 }

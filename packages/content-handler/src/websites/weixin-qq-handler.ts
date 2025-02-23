@@ -15,24 +15,39 @@ export class WeixinQqHandler extends ContentHandler {
     // Retrieve the publish time
     const publishTime = dom.querySelector('#publish_time')?.textContent
     if (publishTime) {
-      const dateTimeFormat = 'yyyy-LL-dd HH:mm'
-      // convert the publish time to a string in the format of "2023-01-01 00:00" in GMT+8
-      const publishTimeInGMT8 = DateTime.fromFormat(publishTime, dateTimeFormat)
-        .setZone('Asia/Shanghai')
-        .toFormat(dateTimeFormat)
-      // replace the publish time in the dom
-      dom.querySelector('#publish_time')?.replaceWith(publishTimeInGMT8)
-    }
-    // This replace the class name of the article info to preserve the block
-    dom
-      .querySelector('.rich_media_meta_list')
-      ?.setAttribute('class', '_omnivore_rich_media_meta_list')
+      const dateTimeFormat = 'yyyy年LL月dd日 HH:mm'
+      // published time is in UTC+8
+      const publishTimeISO = DateTime.fromFormat(publishTime, dateTimeFormat, {
+        zone: 'Asia/Shanghai',
+      }).toISO()
 
-    // This removes the title
+      // create a meta node to store the publish time in ISO format
+      const metaNode = dom.createElement('meta')
+      metaNode.setAttribute('name', 'date')
+      if (publishTimeISO) {
+        metaNode.setAttribute('content', publishTimeISO)
+      }
+      dom.querySelector('head')?.appendChild(metaNode)
+    }
+
+    const author = (
+      dom.querySelector('#js_author_name') || dom.querySelector('#js_name')
+    )?.textContent?.trim()
+    if (author) {
+      const authorNode = dom.createElement('meta')
+      authorNode.setAttribute('name', 'author')
+      authorNode.setAttribute('content', author)
+      dom.querySelector('head')?.appendChild(authorNode)
+    }
+
+    // This removes the title, metadata and cover image
     dom.querySelector('.rich_media_title')?.remove()
+    dom.querySelector('.rich_media_meta_list')?.remove()
+    dom.querySelector('#js_row_immersive_cover_img')?.remove()
 
     // This removes the profile info
     dom.querySelector('.profile_container')?.remove()
+    dom.querySelector('.profile_card_container')?.remove()
 
     //  This removes the footer
     dom.querySelector('#content_bottom_area')?.remove()

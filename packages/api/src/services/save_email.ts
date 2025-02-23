@@ -1,32 +1,42 @@
 import {
+  DirectionalityType,
+  LibraryItem,
+  LibraryItemState,
+} from '../entity/library_item'
+import {
+  cleanUrl,
   generateSlug,
+  isBase64Image,
   stringToHash,
   validatedDate,
   wordsCount,
 } from '../utils/helpers'
 import {
   FAKE_URL_PREFIX,
+  fetchFavicon,
   parsePreparedContent,
   parseUrlMetadata,
 } from '../utils/parser'
-import normalizeUrl from 'normalize-url'
-import { PubsubClient } from '../datalayer/pubsub'
-import { ArticleSavingRequestStatus, Page } from '../elastic/types'
-import { createPage, getPageByParam, updatePage } from '../elastic/pages'
-
-export type SaveContext = {
-  pubsub: PubsubClient
-  uid: string
-  refresh?: boolean
-}
+import { createAndAddLabelsToLibraryItem } from './labels'
+import {
+  createOrUpdateLibraryItem,
+  findLibraryItemByUrl,
+  restoreLibraryItem,
+} from './library_item'
+import { updateReceivedEmail } from './received_emails'
+import { saveSubscription } from './subscriptions'
 
 export type SaveEmailInput = {
+  userId: string
   originalContent: string
   url: string
   title: string
   author: string
   unsubMailTo?: string
   unsubHttpUrl?: string
+  newsletterEmailId?: string
+  receivedEmailId: string
+  folder?: string
 }
 
 const isStubUrl = (url: string): boolean => {
@@ -34,9 +44,8 @@ const isStubUrl = (url: string): boolean => {
 }
 
 export const saveEmail = async (
-  ctx: SaveContext,
   input: SaveEmailInput
-): Promise<Page | undefined> => {
+): Promise<LibraryItem | undefined> => {
   const url = input.url
   const parseResult = await parsePreparedContent(
     url,
@@ -46,66 +55,92 @@ export const saveEmail = async (
         // can leave this empty for now
       },
     },
-    null,
     true
   )
+
   const content = parseResult.parsedContent?.content || input.originalContent
   const slug = generateSlug(input.title)
   const metadata = isStubUrl(url) ? undefined : await parseUrlMetadata(url)
-
-  const articleToSave: Page = {
-    id: '',
-    userId: ctx.uid,
-    slug,
-    content,
-    originalHtml: input.originalContent,
-    description: metadata?.description || parseResult.parsedContent?.excerpt,
-    title: input.title,
-    author: input.author,
-    url: normalizeUrl(parseResult.canonicalUrl || url, {
-      stripHash: true,
-      stripWWW: false,
-    }),
-    pageType: parseResult.pageType,
-    hash: stringToHash(content),
-    image:
-      metadata?.previewImage ||
-      parseResult.parsedContent?.previewImage ||
-      undefined,
-    publishedAt: validatedDate(
-      parseResult.parsedContent?.publishedDate ?? undefined
-    ),
-    createdAt: new Date(),
-    savedAt: new Date(),
-    readingProgressAnchorIndex: 0,
-    readingProgressPercent: 0,
-    subscription: input.author,
-    state: ArticleSavingRequestStatus.Succeeded,
-    siteIcon: parseResult.parsedContent?.siteIcon ?? undefined,
-    siteName: parseResult.parsedContent?.siteName ?? undefined,
-    wordsCount: wordsCount(content),
+  const cleanedUrl = cleanUrl(parseResult.canonicalUrl || url)
+  let siteIcon = parseResult.parsedContent?.siteIcon
+  if (!siteIcon || isBase64Image(siteIcon)) {
+    // fetch favicon if not already set or is a base64 image
+    siteIcon = await fetchFavicon(url)
   }
 
-  const page = await getPageByParam({
-    userId: ctx.uid,
-    url: articleToSave.url,
-    state: ArticleSavingRequestStatus.Succeeded,
-  })
-  if (page) {
-    const result = await updatePage(page.id, { archivedAt: null }, ctx)
-    console.log('updated page from email', result)
+  const existingLibraryItem = await findLibraryItemByUrl(
+    cleanedUrl,
+    input.userId
+  )
+  if (existingLibraryItem) {
+    const updatedLibraryItem = await restoreLibraryItem(
+      existingLibraryItem.id,
+      input.userId
+    )
 
-    return page
+    return updatedLibraryItem
   }
 
-  const pageId = await createPage(articleToSave, ctx)
-  if (!pageId) {
-    console.log('failed to create new page')
+  const labels = [{ name: 'Newsletter' }]
 
-    return undefined
+  // start a transaction to create the library item and update the received email
+  const newLibraryItem = await createOrUpdateLibraryItem(
+    {
+      user: { id: input.userId },
+      slug,
+      readableContent: content,
+      description: metadata?.description || parseResult.parsedContent?.excerpt,
+      title: input.title,
+      author: input.author,
+      originalUrl: cleanedUrl,
+      itemType: parseResult.pageType,
+      textContentHash: stringToHash(content),
+      thumbnail:
+        metadata?.previewImage ||
+        parseResult.parsedContent?.previewImage ||
+        undefined,
+      publishedAt: validatedDate(
+        parseResult.parsedContent?.publishedDate ?? undefined
+      ),
+      state: LibraryItemState.Succeeded,
+      siteIcon,
+      siteName: parseResult.parsedContent?.siteName ?? undefined,
+      wordCount: parseResult.parsedContent?.textContent
+        ? wordsCount(parseResult.parsedContent.textContent)
+        : wordsCount(content, true),
+      subscription: input.author,
+      folder: input.folder,
+      labelNames: labels.map((label) => label.name),
+      itemLanguage: parseResult.parsedContent?.language,
+      directionality:
+        parseResult.parsedContent?.dir?.toLowerCase() === 'rtl'
+          ? DirectionalityType.RTL
+          : DirectionalityType.LTR, // default to LTR
+    },
+    input.userId
+  )
+
+  if (input.newsletterEmailId) {
+    await saveSubscription({
+      userId: input.userId,
+      name: input.author,
+      unsubscribeMailTo: input.unsubMailTo,
+      unsubscribeHttpUrl: input.unsubHttpUrl,
+      icon: siteIcon,
+      newsletterEmailId: input.newsletterEmailId,
+    })
   }
 
-  articleToSave.id = pageId
+  // add newsletter label to the item
+  await createAndAddLabelsToLibraryItem(
+    newLibraryItem.id,
+    input.userId,
+    labels,
+    undefined,
+    'system'
+  )
 
-  return articleToSave
+  await updateReceivedEmail(input.receivedEmailId, 'article', input.userId)
+
+  return newLibraryItem
 }

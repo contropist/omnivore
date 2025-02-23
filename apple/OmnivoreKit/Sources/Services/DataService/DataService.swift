@@ -17,10 +17,14 @@ let logger = Logger(subsystem: "app.omnivore", category: "data-service")
 
 public final class DataService: ObservableObject {
   public static var registerIntercomUser: ((String) -> Void)?
+  public static var setIntercomUserHash: ((String) -> Void)?
+
   public static var showIntercomMessenger: (() -> Void)?
 
   public let appEnvironment: AppEnvironment
   public let networker: Networker
+
+  public let prefetchQueue = OperationQueue()
 
   var persistentContainer: PersistentContainer
   public var backgroundContext: NSManagedObjectContext
@@ -28,6 +32,8 @@ public final class DataService: ObservableObject {
   public var viewContext: NSManagedObjectContext {
     persistentContainer.viewContext
   }
+
+  public var featureFlags = FeatureFlags()
 
   public var lastItemSyncTime: Date {
     get {
@@ -50,19 +56,39 @@ public final class DataService: ObservableObject {
     self.appEnvironment = appEnvironment
     self.networker = networker
     self.persistentContainer = PersistentContainer.make()
+
+    persistentContainer.loadPersistentStores { _, error in
+      if let error = error {
+        fatalError("Core Data store failed to load with error: \(error)")
+      }
+    }
     self.backgroundContext = persistentContainer.newBackgroundContext()
 
     backgroundContext.automaticallyMergesChangesFromParent = true
     backgroundContext.mergePolicy = NSMergePolicy.mergeByPropertyObjectTrump
+  }
 
-    if isFirstTimeRunningNewAppBuild() {
-      resetLocalStorage()
-    } else {
-      persistentContainer.loadPersistentStores { _, error in
-        if let error = error {
-          fatalError("Core Data store failed to load with error: \(error)")
-        }
+  public func cleanupDeletedItems(in context: NSManagedObjectContext) {
+    let fetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
+
+    let calendar = Calendar.current
+    let oneDayAgo = calendar.date(byAdding: .day, value: -1, to: Date())!
+
+    let statePredicate = NSPredicate(format: "state == %@", "DELETED")
+    let datePredicate = NSPredicate(format: "updatedAt < %@", oneDayAgo as NSDate)
+
+    fetchRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [statePredicate, datePredicate])
+
+    do {
+      let oldDeletedItems = try context.fetch(fetchRequest)
+
+      for item in oldDeletedItems {
+        context.delete(item)
       }
+
+      try context.save()
+    } catch {
+      print("Error fetching or deleting objects: \(error)")
     }
   }
 
@@ -70,19 +96,6 @@ public final class DataService: ObservableObject {
     let fetchRequest: NSFetchRequest<Models.Viewer> = Viewer.fetchRequest()
     fetchRequest.fetchLimit = 1 // we should only have one viewer saved
     return try? persistentContainer.viewContext.fetch(fetchRequest).first
-  }
-
-  public func username() async -> String? {
-    if let cachedUsername = currentViewer?.username {
-      return cachedUsername
-    }
-
-    if let viewerObjectID = try? await fetchViewer() {
-      let viewer = backgroundContext.object(with: viewerObjectID) as? Viewer
-      return viewer?.unwrappedUsername
-    }
-
-    return nil
   }
 
   public func switchAppEnvironment(appEnvironment: AppEnvironment) {
@@ -112,6 +125,17 @@ public final class DataService: ObservableObject {
       }
     } catch {
       logger.debug("Failed to clear core data stores")
+    }
+  }
+
+  func deleteAllEntities(entityName: String, inContext context: NSManagedObjectContext) {
+    let deleteFetch = NSFetchRequest<NSFetchRequestResult>(entityName: entityName)
+    let deleteRequest = NSBatchDeleteRequest(fetchRequest: deleteFetch)
+    do {
+      try context.execute(deleteRequest)
+      try context.save()
+    } catch {
+      print("Error deleting all \(entityName) items.", error)
     }
   }
 
@@ -162,7 +186,20 @@ public final class DataService: ObservableObject {
     }
   }
 
+  public static func deleteLocalStorage() {
+    do {
+      if let storeURL = PersistentContainer.path() {
+        try FileManager.default.removeItem(atPath: storeURL.path)
+      }
+    } catch {
+      print(error.localizedDescription)
+      print("ERROR: ", error)
+    }
+  }
+
   public func resetLocalStorage() {
+    UserDefaults.standard.set(nil, forKey: UserDefaultKey.lastSelectedTabItem.rawValue)
+
     lastItemSyncTime = Date(timeIntervalSinceReferenceDate: 0)
 
     clearCoreData()
@@ -177,7 +214,7 @@ public final class DataService: ObservableObject {
     backgroundContext = persistentContainer.newBackgroundContext()
   }
 
-  private func isFirstTimeRunningNewAppBuild() -> Bool {
+  private static func isFirstTimeRunningNewAppBuild() -> Bool {
     let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
 
@@ -206,12 +243,12 @@ public final class DataService: ObservableObject {
 
     try await backgroundContext.perform { [weak self] in
       guard let self = self else { return }
-      let fetchRequest: NSFetchRequest<Models.LinkedItem> = LinkedItem.fetchRequest()
+      let fetchRequest: NSFetchRequest<Models.LibraryItem> = LibraryItem.fetchRequest()
       fetchRequest.predicate = NSPredicate(format: "pageURLString = %@", normalizedURL)
 
       let currentTime = Date()
       let existingItem = try? self.backgroundContext.fetch(fetchRequest).first
-      let linkedItem = existingItem ?? LinkedItem(entity: LinkedItem.entity(), insertInto: self.backgroundContext)
+      let linkedItem = existingItem ?? LibraryItem(entity: LibraryItem.entity(), insertInto: self.backgroundContext)
 
       linkedItem.createdId = requestId
       linkedItem.id = existingItem?.unwrappedID ?? requestId
@@ -242,7 +279,7 @@ public final class DataService: ObservableObject {
         linkedItem.contentReader = "PDF"
         linkedItem.tempPDFURL = localUrl
         linkedItem.title = PDFUtils.titleFromPdfFile(pageScrape.url)
-      case let .html(html: html, title: title, highlightData: _):
+      case let .html(html: html, title: title, iconURL: _, highlightData: _):
         linkedItem.contentReader = "WEB"
         linkedItem.originalHtml = html
         linkedItem.title = title ?? PDFUtils.titleFromPdfFile(pageScrape.url)
@@ -262,5 +299,12 @@ public final class DataService: ObservableObject {
       }
     }
     return objectID
+  }
+
+  public func tryUpdateFeatureFlags() async {
+    if let features = (try? await fetchViewer())?.enabledFeatures {
+      featureFlags.digestEnabled = features.contains("ai-digest")
+      featureFlags.explainEnabled = features.contains("ai-explain")
+    }
   }
 }

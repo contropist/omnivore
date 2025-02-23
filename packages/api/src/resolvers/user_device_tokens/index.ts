@@ -1,4 +1,7 @@
-import { authorized } from '../../utils/helpers'
+import { DatabaseError } from 'pg'
+import { QueryFailedError } from 'typeorm'
+import { UserDeviceToken } from '../../entity/user_device_tokens'
+import { env } from '../../env'
 import {
   DeviceToken,
   DeviceTokensError,
@@ -9,18 +12,15 @@ import {
   SetDeviceTokenErrorCode,
   SetDeviceTokenSuccess,
 } from '../../generated/graphql'
-import { analytics } from '../../utils/analytics'
-import { env } from '../../env'
 import {
   createDeviceToken,
   deleteDeviceToken,
-  getDeviceToken,
-  getDeviceTokenByToken,
-  getDeviceTokensByUserId,
+  findDeviceTokenById,
+  findDeviceTokenByToken,
+  findDeviceTokensByUserId,
 } from '../../services/user_device_tokens'
-import { UserDeviceToken } from '../../entity/user_device_tokens'
-import { QueryFailedError } from 'typeorm'
-import { DatabaseError } from 'pg'
+import { analytics } from '../../utils/analytics'
+import { authorized } from '../../utils/gql-utils'
 
 const PG_UNIQUE_CONSTRAINT_VIOLATION = '23505'
 
@@ -28,13 +28,11 @@ export const setDeviceTokenResolver = authorized<
   SetDeviceTokenSuccess,
   SetDeviceTokenError,
   MutationSetDeviceTokenArgs
->(async (_parent, { input }, { claims: { uid }, log }) => {
-  console.log('setDeviceTokenResolver', input)
-
+>(async (_parent, { input }, { uid, log }) => {
   const { id, token } = input
 
   if (!id && !token) {
-    console.log('id or token is required')
+    log.error('id or token is required')
 
     return {
       errorCodes: [SetDeviceTokenErrorCode.BadRequest],
@@ -44,7 +42,7 @@ export const setDeviceTokenResolver = authorized<
   try {
     // when token is null, we are deleting it
     if (!token && id) {
-      const deviceToken = await getDeviceToken(id)
+      const deviceToken = await findDeviceTokenById(id, uid)
       if (!deviceToken) {
         log.error('device token not found', id)
 
@@ -62,8 +60,8 @@ export const setDeviceTokenResolver = authorized<
         }
       }
 
-      analytics.track({
-        userId: uid,
+      analytics.capture({
+        distinctId: uid,
         event: 'device_token_deleted',
         properties: {
           id: deviceToken.id,
@@ -79,8 +77,8 @@ export const setDeviceTokenResolver = authorized<
       // create token
       const deviceToken = await createDeviceToken(uid, token)
 
-      analytics.track({
-        userId: uid,
+      analytics.capture({
+        distinctId: uid,
         event: 'device_token_created',
         properties: {
           id: deviceToken.id,
@@ -107,7 +105,7 @@ export const setDeviceTokenResolver = authorized<
       token
     ) {
       // duplicate token
-      const deviceToken = await getDeviceTokenByToken(token)
+      const deviceToken = await findDeviceTokenByToken(token, uid)
 
       if (!deviceToken) {
         return {
@@ -139,8 +137,8 @@ export const deviceTokensResolver = authorized<
       },
     })
 
-    const deviceTokens = await getDeviceTokensByUserId(uid)
-    console.log('deviceTokens', deviceTokens)
+    const deviceTokens = await findDeviceTokensByUserId(uid)
+    log.info('deviceTokens', deviceTokens)
 
     return {
       deviceTokens: deviceTokens.map(deviceTokenToData),

@@ -1,4 +1,4 @@
-import { authorized } from '../../utils/helpers'
+import { Rule } from '../../entity/rule'
 import {
   DeleteRuleError,
   DeleteRuleErrorCode,
@@ -7,60 +7,39 @@ import {
   MutationSetRuleArgs,
   QueryRulesArgs,
   RulesError,
-  RulesErrorCode,
   RulesSuccess,
   SetRuleError,
   SetRuleErrorCode,
   SetRuleSuccess,
 } from '../../generated/graphql'
-import { getRepository } from '../../entity/utils'
-import { User } from '../../entity/user'
-import { Rule } from '../../entity/rule'
+import { deleteRule } from '../../services/rules'
+import { authorized } from '../../utils/gql-utils'
+import { parseSearchQuery } from '../../utils/search'
 
 export const setRuleResolver = authorized<
   SetRuleSuccess,
   SetRuleError,
   MutationSetRuleArgs
->(async (_, { input }, { claims, log }) => {
-  log.info('Setting rules', {
-    input,
-    labels: {
-      source: 'resolver',
-      resolver: 'setRulesResolver',
-      uid: claims.uid,
-    },
-  })
-
+>(async (_, { input }, { authTrx, uid }) => {
   try {
-    const user = await getRepository(User).findOneBy({ id: claims.uid })
-    if (!user) {
-      return {
-        errorCodes: [SetRuleErrorCode.Unauthorized],
-      }
-    }
-
-    const rule = await getRepository(Rule).save({
-      ...input,
-      id: input.id || undefined,
-      user: { id: claims.uid },
-    })
-
-    return {
-      rule,
-    }
+    // validate filter
+    parseSearchQuery(input.filter)
   } catch (error) {
-    log.error('Error setting rules', {
-      error,
-      labels: {
-        source: 'resolver',
-        resolver: 'setRulesResolver',
-        uid: claims.uid,
-      },
-    })
-
     return {
       errorCodes: [SetRuleErrorCode.BadRequest],
     }
+  }
+
+  const rule = await authTrx((t) =>
+    t.getRepository(Rule).save({
+      ...input,
+      id: input.id || undefined,
+      user: { id: uid },
+    })
+  )
+
+  return {
+    rule,
   }
 })
 
@@ -68,45 +47,16 @@ export const rulesResolver = authorized<
   RulesSuccess,
   RulesError,
   QueryRulesArgs
->(async (_, { enabled }, { claims, log }) => {
-  log.info('Getting rules', {
-    enabled,
-    labels: {
-      source: 'resolver',
-      resolver: 'rulesResolver',
-      uid: claims.uid,
-    },
-  })
-
-  try {
-    const user = await getRepository(User).findOneBy({ id: claims.uid })
-    if (!user) {
-      return {
-        errorCodes: [RulesErrorCode.Unauthorized],
-      }
-    }
-
-    const rules = await getRepository(Rule).findBy({
-      user: { id: claims.uid },
+>(async (_, { enabled }, { authTrx, uid }) => {
+  const rules = await authTrx((t) =>
+    t.getRepository(Rule).findBy({
+      user: { id: uid },
       enabled: enabled === null ? undefined : enabled,
     })
+  )
 
-    return {
-      rules,
-    }
-  } catch (error) {
-    log.error('Error getting rules', {
-      error,
-      labels: {
-        source: 'resolver',
-        resolver: 'rulesResolver',
-        uid: claims.uid,
-      },
-    })
-
-    return {
-      errorCodes: [RulesErrorCode.BadRequest],
-    }
+  return {
+    rules,
   }
 })
 
@@ -114,46 +64,18 @@ export const deleteRuleResolver = authorized<
   DeleteRuleSuccess,
   DeleteRuleError,
   MutationDeleteRuleArgs
->(async (_, { id }, { claims, log }) => {
-  log.info('Deleting rule', {
-    id,
-    labels: {
-      source: 'resolver',
-      resolver: 'deleteRuleResolver',
-      uid: claims.uid,
-    },
-  })
-
+>(async (_, { id }, { uid, log }) => {
   try {
-    const rule = await getRepository(Rule).findOneBy({
-      id,
-      user: { id: claims.uid },
-    })
-    if (!rule) {
-      return {
-        errorCodes: [DeleteRuleErrorCode.NotFound],
-      }
-    }
-
-    await getRepository(Rule).delete({
-      id: rule.id,
-    })
+    const rule = await deleteRule(id, uid)
 
     return {
       rule,
     }
   } catch (error) {
-    log.error('Error deleting rule', {
-      error,
-      labels: {
-        source: 'resolver',
-        resolver: 'deleteRuleResolver',
-        uid: claims.uid,
-      },
-    })
+    log.error('Error deleting rule', error)
 
     return {
-      errorCodes: [DeleteRuleErrorCode.BadRequest],
+      errorCodes: [DeleteRuleErrorCode.NotFound],
     }
   }
 })

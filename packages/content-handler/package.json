@@ -10,6 +10,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "test": "yarn mocha -r ts-node/register --config mocha-config.json",
+    "test:typecheck": "tsc --noEmit",
     "lint": "eslint src --ext ts,js,tsx,jsx",
     "compile": "tsc",
     "build": "tsc"
@@ -29,13 +30,16 @@
     "nock": "^13.2.9"
   },
   "dependencies": {
+    "@omnivore/utils": "1.0.0",
     "addressparser": "^1.0.1",
     "axios": "^0.27.2",
     "linkedom": "^0.14.16",
     "lodash": "^4.17.21",
     "luxon": "^3.0.4",
-    "puppeteer-core": "^19.1.1",
     "underscore": "^1.13.6",
     "uuid": "^9.0.0"
+  },
+  "volta": {
+    "extends": "../../package.json"
   }
 }

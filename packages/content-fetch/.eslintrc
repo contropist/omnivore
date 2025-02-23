@@ -1,0 +1,19 @@
+{
+  "extends": "../../.eslintrc",
+  "parserOptions": {
+    "project": "tsconfig.json"
+  },
+  "rules": {
+    "@typescript-eslint/no-unsafe-assignment": 0,
+    "@typescript-eslint/no-unnecessary-type-assertion": 0,
+    "@typescript-eslint/no-unsafe-member-access": ["warn"],
+    "@typescript-eslint/no-unsafe-call": ["warn"],
+    "@typescript-eslint/no-unsafe-argument": ["warn"],
+    "@typescript-eslint/no-floating-promises": [
+      "error",
+      {
+        "ignoreIIFE": true
+      }
+    ]
+  }
+}

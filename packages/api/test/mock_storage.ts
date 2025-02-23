@@ -1,6 +1,6 @@
 import { Writable } from 'stream'
 
-class MockStorage {
+export class MockStorage {
   buckets: { [name: string]: MockBucket }
 
   constructor() {
@@ -12,7 +12,7 @@ class MockStorage {
   }
 }
 
-export class MockBucket {
+class MockBucket {
   name: string
   files: { [path: string]: MockFile }
 
@@ -37,6 +37,27 @@ class MockFile {
 
   createWriteStream() {
     return new MockWriteStream(this)
+  }
+
+  getSignedUrl() {
+    return ['https://signed-url.upload.omnivore.app']
+  }
+
+  getMetadata() {
+    return [{ md5Hash: 'md5Hash' }]
+  }
+
+  publicUrl() {
+    return 'https://public-url.upload.omnivore.app'
+  }
+
+  makePublic() {
+    return
+  }
+
+  save() {
+    console.log('Saved file to:', this.path)
+    return
   }
 }
 

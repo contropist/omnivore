@@ -3,6 +3,7 @@ import { parseHTML } from 'linkedom'
 import { nanoid } from 'nanoid'
 import { v4 as uuidv4 } from 'uuid'
 import { interpolationSearch } from './interpolationSearch'
+import { logger } from './logger'
 
 const highlightTag = 'omnivore_highlight'
 export const maxHighlightLength = 2000
@@ -120,34 +121,43 @@ export const findEmbeddedHighlight = (
     return undefined
   }
 
-  const beforeNodes = getTextNodesBetween(dom, articleContentElement, startNode)
-  const highlightNodes = getTextNodesBetween(dom, startNode, endNode)
-  const afterNodes = getTextNodesBetween(dom, endNode, articleContentElement)
-  const allArticleNodes = getTextNodesBetween(
-    dom,
-    articleContentElement,
-    articleContentElement
-  )
+  try {
+    const beforeNodes = getTextNodesBetween(
+      dom,
+      articleContentElement,
+      startNode
+    )
+    const highlightNodes = getTextNodesBetween(dom, startNode, endNode)
+    const afterNodes = getTextNodesBetween(dom, endNode, articleContentElement)
+    const allArticleNodes = getTextNodesBetween(
+      dom,
+      articleContentElement,
+      articleContentElement
+    )
 
-  const patch = generateDiffPatch(
-    allArticleNodes,
-    beforeNodes,
-    highlightNodes,
-    afterNodes
-  )
+    const patch = generateDiffPatch(
+      allArticleNodes,
+      beforeNodes,
+      highlightNodes,
+      afterNodes
+    )
 
-  const id = uuidv4()
-  const shortId = nanoid(8)
-  const info = getPrefixAndSuffix(allArticleNodes, patch)
-  const quote = getQuoteText(highlightNodes)
+    const id = uuidv4()
+    const shortId = nanoid(8)
+    const info = getPrefixAndSuffix(allArticleNodes, patch)
+    const quote = getQuoteText(highlightNodes)
 
-  return {
-    id,
-    shortId,
-    quote,
-    patch,
-    prefix: info.prefix,
-    suffix: info.suffix,
+    return {
+      id,
+      shortId,
+      quote,
+      patch,
+      prefix: info.prefix,
+      suffix: info.suffix,
+    }
+  } catch (error) {
+    logger.error(error)
+    return undefined
   }
 }
 
@@ -389,7 +399,7 @@ export function getArticleTextNodes(
     const rootNode = document.getRootNode()
     return getTextNodesBetween(rootNode, rootNode, rootNode)
   } catch (error) {
-    console.log(error)
+    logger.error(error)
     return null
   }
 }

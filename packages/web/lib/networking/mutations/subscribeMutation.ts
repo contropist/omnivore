@@ -1,26 +1,42 @@
 import { gql } from 'graphql-request'
 import { gqlFetcher } from '../networkHelpers'
-import { Subscription } from '../queries/useGetSubscriptionsQuery'
+import {
+  Subscription,
+  SubscriptionType,
+} from '../queries/useGetSubscriptionsQuery'
 
 type SubscribeResult = {
   subscribe: Subscribe
-  errorCodes?: unknown[]
+}
+
+enum SubscribeErrorCode {
+  BadRequest = 'BAD_REQUEST',
+  NotFound = 'NOT_FOUND',
+  Unauthorized = 'UNAUTHORIZED',
+  AlreadySubscribed = 'ALREADY_SUBSCRIBED',
 }
 
 type Subscribe = {
-  subscriptions: Subscription[]
+  subscriptions?: Subscription[]
+  errorCodes?: SubscribeErrorCode[]
+}
+
+export type SubscribeMutationInput = {
+  name?: string
+  url?: string
+  subscriptionType?: SubscriptionType
 }
 
 export async function subscribeMutation(
-  subscribeName: string
-): Promise<any | undefined> {
+  input: SubscribeMutationInput
+): Promise<SubscribeResult> {
   const mutation = gql`
-    mutation {
-      subscribe(name: "${subscribeName}") {
+    mutation Subscribe($input: SubscribeInput!) {
+      subscribe(input: $input) {
         ... on SubscribeSuccess {
           subscriptions {
-              id
-           }
+            id
+          }
         }
         ... on SubscribeError {
           errorCodes
@@ -29,10 +45,14 @@ export async function subscribeMutation(
     }
   `
   try {
-    const data = (await gqlFetcher(mutation)) as SubscribeResult
-    return data.errorCodes ? undefined : data.subscribe
+    const data = (await gqlFetcher(mutation, { input })) as SubscribeResult
+    return data
   } catch (error) {
     console.log('subscribeMutation error', error)
-    return undefined
+    return {
+      subscribe: {
+        errorCodes: [SubscribeErrorCode.BadRequest],
+      },
+    }
   }
 }

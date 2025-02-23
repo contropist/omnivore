@@ -26,6 +26,7 @@ public enum LocalText {
   public static let labelsViewAssignNameColor = localText(key: "labelsViewAssignNameColor")
   public static let createLabelMessage = localText(key: "createLabelMessage")
   public static let labelsPurposeDescription = localText(key: "labelsPurposeDescription")
+  public static let labelNamePlaceholder = localText(key: "labelNamePlaceholder")
 
   // Manage Account View
   public static let manageAccountDelete = localText(key: "manageAccountDelete")
@@ -189,6 +190,8 @@ public enum LocalText {
   public static let filesGeneric = localText(key: "filesGeneric")
   public static let newestGeneric = localText(key: "newestGeneric")
   public static let oldestGeneric = localText(key: "oldestGeneric")
+  public static let longestGeneric = localText(key: "longestGeneric")
+  public static let shortestGeneric = localText(key: "shortestGeneric")
   public static let recentlyReadGeneric = localText(key: "recentlyReadGeneric")
   public static let recentlyPublishedGeneric = localText(key: "recentlyPublishedGeneric")
   public static let clubsGeneric = localText(key: "clubsGeneric")
@@ -198,4 +201,5 @@ public enum LocalText {
   public static let dismissButton = localText(key: "dismissButton")
   public static let errorNetwork = localText(key: "errorNetwork")
   public static let documentationGeneric = localText(key: "documentationGeneric")
+  public static let readerSettingsGeneric = localText(key: "readerSettingsGeneric")  
 }

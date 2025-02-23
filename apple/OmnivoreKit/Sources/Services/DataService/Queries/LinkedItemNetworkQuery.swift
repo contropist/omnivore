@@ -4,13 +4,15 @@ import Models
 import SwiftGraphQL
 
 struct InternalLinkedItemQueryResult {
-  let items: [InternalLinkedItem]
+  let items: [InternalLibraryItem]
   let cursor: String?
+  let totalCount: Int?
 }
 
 struct InternalLinkedItemUpdatesQueryResult {
-  let items: [InternalLinkedItem]
   let deletedItemIDs: [String]
+  let newItems: [InternalLibraryItem]
+  let updatedItems: [InternalLibraryItem]
   let cursor: String?
   let hasMoreItems: Bool
   let totalCount: Int
@@ -19,7 +21,8 @@ struct InternalLinkedItemUpdatesQueryResult {
 private struct SyncItemEdge {
   let itemID: String
   let isDeletedItem: Bool
-  let item: InternalLinkedItem?
+  let isUpdatedItem: Bool
+  let item: InternalLibraryItem?
 }
 
 extension DataService {
@@ -68,13 +71,16 @@ extension DataService {
       )
     }
 
-    let sort = InputObjects.SortParams(by: .updatedTime,
-                                       order: OptionalArgument(descending ? .descending : .ascending))
+    let sort = InputObjects.SortParams(
+      by: .updatedTime,
+      order: OptionalArgument(descending ? .descending : .ascending)
+    )
 
     let query = Selection.Query {
       try $0.updatesSince(
         after: OptionalArgument(cursor),
         first: OptionalArgument(limit),
+        folder: OptionalArgument("all"),
         since: DateTime(from: since),
         sort: OptionalArgument(sort),
         selection: selection
@@ -90,21 +96,25 @@ extension DataService {
 
         switch payload.data {
         case let .success(result: result):
-          var items = [InternalLinkedItem]()
+          var newItems = [InternalLibraryItem]()
+          var updatedItems = [InternalLibraryItem]()
           var deletedItemIDs = [String]()
 
           for edge in result.edges {
             if edge.isDeletedItem {
               deletedItemIDs.append(edge.itemID)
+            } else if let item = edge.item, edge.isUpdatedItem {
+              updatedItems.append(item)
             } else if let item = edge.item {
-              items.append(item)
+              newItems.append(item)
             }
           }
 
           continuation.resume(
             returning: InternalLinkedItemUpdatesQueryResult(
-              items: items,
               deletedItemIDs: deletedItemIDs,
+              newItems: newItems,
+              updatedItems: updatedItems,
               cursor: result.cursor,
               hasMoreItems: result.hasMoreItems,
               totalCount: result.totalCount
@@ -144,6 +154,9 @@ extension DataService {
               items: try $0.edges(selection: searchItemEdgeSelection.list),
               cursor: try $0.pageInfo(selection: Selection.PageInfo {
                 try $0.endCursor()
+              }),
+              totalCount: try $0.pageInfo(selection: Selection.PageInfo {
+                try $0.totalCount()
               })
             )
           )
@@ -155,6 +168,7 @@ extension DataService {
       try $0.search(
         after: OptionalArgument(cursor),
         first: OptionalArgument(limit),
+        includeContent: OptionalArgument(true),
         query: OptionalArgument(searchQuery),
         selection: selection
       )
@@ -186,13 +200,13 @@ extension DataService {
   ///   - itemID: id of the item being requested
   /// - Returns: Returns an `InternalLinkedItem` or throws a `ContentFetchError` if
   /// request could not be completed
-  func fetchLinkedItem(username: String, itemID: String) async throws -> InternalLinkedItem {
+  func fetchLinkedItem(username: String, itemID: String) async throws -> InternalLibraryItem {
     struct ArticleProps {
-      let item: InternalLinkedItem
+      let item: InternalLibraryItem
     }
 
     enum QueryResult {
-      case success(result: InternalLinkedItem)
+      case success(result: InternalLibraryItem)
       case error(error: String)
     }
 
@@ -252,13 +266,14 @@ let recommendationSelection = Selection.Recommendation {
 }
 
 private let libraryArticleSelection = Selection.Article {
-  InternalLinkedItem(
+  InternalLibraryItem(
     id: try $0.id(),
     title: try $0.title(),
     createdAt: try $0.createdAt().value ?? Date(),
     savedAt: try $0.savedAt().value ?? Date(),
     readAt: try $0.readAt()?.value,
-    updatedAt: try $0.updatedAt().value ?? Date(),
+    updatedAt: try $0.updatedAt()?.value ?? Date(),
+    folder: try $0.folder(),
     state: try $0.state()?.rawValue.asArticleContentStatus ?? .succeeded,
     readingProgress: try $0.readingProgressPercent(),
     readingProgressAnchor: try $0.readingProgressAnchorIndex(),
@@ -274,11 +289,14 @@ private let libraryArticleSelection = Selection.Article {
     slug: try $0.slug(),
     isArchived: try $0.isArchived(),
     contentReader: try $0.contentReader().rawValue,
+    htmlContent: try $0.content(),
     originalHtml: nil,
     language: try $0.language(),
     wordsCount: try $0.wordsCount(),
+    downloadURL: try $0.url(),
     recommendations: try $0.recommendations(selection: recommendationSelection.list.nullable) ?? [],
-    labels: try $0.labels(selection: feedItemLabelSelection.list.nullable) ?? []
+    labels: try $0.labels(selection: feedItemLabelSelection.list.nullable) ?? [],
+    highlights: try $0.highlights(selection: highlightSelection.list)
   )
 }
 
@@ -286,18 +304,20 @@ private let syncItemEdgeSelection = Selection.SyncUpdatedItemEdge {
   SyncItemEdge(
     itemID: try $0.itemId(),
     isDeletedItem: try $0.updateReason() == .deleted,
+    isUpdatedItem: try $0.updateReason() == .updated,
     item: try $0.node(selection: searchItemSelection.nullable)
   )
 }
 
 private let searchItemSelection = Selection.SearchItem {
-  InternalLinkedItem(
+  return InternalLibraryItem(
     id: try $0.id(),
     title: try $0.title(),
     createdAt: try $0.createdAt().value ?? Date(),
     savedAt: try $0.savedAt().value ?? Date(),
     readAt: try $0.readAt()?.value,
     updatedAt: try $0.updatedAt()?.value ?? Date(),
+    folder: try $0.folder(),
     state: try $0.state()?.rawValue.asArticleContentStatus ?? .succeeded,
     readingProgress: try $0.readingProgressPercent(),
     readingProgressAnchor: try $0.readingProgressAnchorIndex(),
@@ -313,11 +333,14 @@ private let searchItemSelection = Selection.SearchItem {
     slug: try $0.slug(),
     isArchived: try $0.isArchived(),
     contentReader: try $0.contentReader().rawValue,
+    htmlContent: try $0.content(),
     originalHtml: nil,
     language: try $0.language(),
     wordsCount: try $0.wordsCount(),
+    downloadURL: try $0.url(),
     recommendations: try $0.recommendations(selection: recommendationSelection.list.nullable) ?? [],
-    labels: try $0.labels(selection: feedItemLabelSelection.list.nullable) ?? []
+    labels: try $0.labels(selection: feedItemLabelSelection.list.nullable) ?? [],
+    highlights: try $0.highlights(selection: highlightSelection.list.nullable) ?? []
   )
 }
 

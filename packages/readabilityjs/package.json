@@ -32,11 +32,18 @@
     "linkedom": "^0.14.9",
     "mocha": "^8.2.0",
     "nock": "^13.3.1",
-    "puppeteer": "^10.1.0",
+    "puppeteer-core": "^22.12.1",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-adblocker": "^2.13.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "sinon": "^7.3.2"
   },
   "dependencies": {
+    "cld": "^2.9.1",
     "html-entities": "^2.3.2",
     "parse-srcset": "^1.0.2"
+  },
+  "volta": {
+    "extends": "../../package.json"
   }
 }

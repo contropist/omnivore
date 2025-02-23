@@ -1,11 +1,10 @@
 import axios from 'axios'
-import { HighlightType, Page } from '../../elastic/types'
+import { HighlightType } from '../../entity/highlight'
 import { Integration } from '../../entity/integration'
-import { getRepository } from '../../entity/utils'
-import { env } from '../../env'
-import { wait } from '../../utils/helpers'
+import { logger } from '../../utils/logger'
 import { getHighlightUrl } from '../highlights'
-import { IntegrationService } from './integration'
+import { findLibraryItemsByIds, getItemUrl, ItemEvent } from '../library_item'
+import { IntegrationClient } from './integration'
 
 interface ReadwiseHighlight {
   // The highlight text, (technically the only field required in a highlight object)
@@ -34,110 +33,136 @@ interface ReadwiseHighlight {
   highlight_url?: string
 }
 
-export const READWISE_API_URL = 'https://readwise.io/api/v2'
-
-export class ReadwiseIntegration extends IntegrationService {
+export class ReadwiseClient implements IntegrationClient {
   name = 'READWISE'
-  accessToken = async (token: string): Promise<string | null> => {
-    const authUrl = `${env.readwise.apiUrl || READWISE_API_URL}/auth`
+  token: string
+
+  _headers = {
+    'Content-Type': 'application/json',
+  }
+  _axios = axios.create({
+    baseURL: 'https://readwise.io/api/v2',
+    timeout: 5000, // 5 seconds
+  })
+  private integrationData?: Integration
+
+  constructor(token: string, integration?: Integration) {
+    this.token = token
+    this.integrationData = integration
+  }
+
+  accessToken = async (): Promise<string | null> => {
     try {
-      const response = await axios.get(authUrl, {
+      const response = await this._axios.get('/auth', {
         headers: {
-          Authorization: `Token ${token}`,
+          ...this._headers,
+          Authorization: `Token ${this.token}`,
         },
       })
-      return response.status === 204 ? token : null
+      return response.status === 204 ? this.token : null
     } catch (error) {
-      console.log('error validating readwise token', error)
+      if (axios.isAxiosError(error)) {
+        logger.error(error.response)
+      } else {
+        logger.error(error)
+      }
       return null
     }
   }
-  export = async (
-    integration: Integration,
-    pages: Page[]
-  ): Promise<boolean> => {
-    let result = true
 
-    const highlights = pages.flatMap(this.pageToReadwiseHighlight)
+  export = async (items: ItemEvent[]): Promise<boolean> => {
+    if (!this.integrationData) {
+      logger.error('Integration data is missing')
+      return false
+    }
+
+    if (
+      items.every((item) => !item.highlights || item.highlights.length === 0)
+    ) {
+      return false
+    }
+
+    const userId = this.integrationData.userId
+    const libraryItems = await findLibraryItemsByIds(
+      items.map((item) => item.id),
+      userId,
+      {
+        select: ['id', 'title', 'author', 'thumbnail', 'siteName'],
+      }
+    )
+    console.log(libraryItems)
+
+    items.forEach((item) => {
+      const libraryItem = libraryItems.find((li) => li.id === item.id)
+      if (!libraryItem) {
+        return
+      }
+
+      item.title = libraryItem.title
+      item.author = libraryItem.author
+      item.thumbnail = libraryItem.thumbnail
+      item.siteName = libraryItem.siteName
+    })
+
+    const highlights = items.flatMap(this._itemToReadwiseHighlight)
+
+    let result = true
     // If there are no highlights, we will skip the sync
     if (highlights.length > 0) {
-      result = await this.syncWithReadwise(integration.token, highlights)
+      result = await this._syncWithReadwise(highlights)
     }
 
-    // update integration syncedAt if successful
-    if (result) {
-      console.log('updating integration syncedAt')
-      await getRepository(Integration).update(integration.id, {
-        syncedAt: new Date(),
-      })
-    }
     return result
   }
 
-  pageToReadwiseHighlight = (page: Page): ReadwiseHighlight[] => {
-    const { highlights } = page
-    if (!highlights) return []
-    const category = page.siteName === 'Twitter' ? 'tweets' : 'articles'
-    return highlights
-      .map((highlight) => {
-        // filter out highlights that are not of type highlight or have no quote
-        if (highlight.type !== HighlightType.Highlight || !highlight.quote) {
-          return undefined
-        }
-
-        return {
-          text: highlight.quote,
-          title: page.title,
-          author: page.author || undefined,
-          highlight_url: getHighlightUrl(page.slug, highlight.id),
-          highlighted_at: new Date(highlight.createdAt).toISOString(),
-          category,
-          image_url: page.image || undefined,
-          // location: highlight.highlightPositionAnchorIndex || undefined,
-          location_type: 'order',
-          note: highlight.annotation || undefined,
-          source_type: 'omnivore',
-          source_url: page.url,
-        }
-      })
-      .filter((highlight) => highlight !== undefined) as ReadwiseHighlight[]
+  auth = () => {
+    throw new Error('Method not implemented.')
   }
 
-  syncWithReadwise = async (
-    token: string,
-    highlights: ReadwiseHighlight[],
-    retryCount = 0
+  private _itemToReadwiseHighlight = (item: ItemEvent): ReadwiseHighlight[] => {
+    const category = item.siteName === 'Twitter' ? 'tweets' : 'articles'
+
+    return item.highlights
+      ? item.highlights
+          // filter out highlights that are not of type highlight or have no quote
+          .filter(
+            (highlight) => highlight.highlightType === HighlightType.Highlight
+          )
+          .map((highlight) => {
+            return {
+              text: highlight.quote || '',
+              title: item.title,
+              author: item.author || undefined,
+              highlight_url: getHighlightUrl(item.id, highlight.id),
+              highlighted_at: highlight.createdAt
+                ? new Date(highlight.createdAt as string).toISOString()
+                : undefined,
+              category,
+              image_url: item.thumbnail || undefined,
+              location_type: 'order',
+              note: highlight.annotation || undefined,
+              source_type: 'omnivore',
+              source_url: getItemUrl(item.id),
+            }
+          })
+      : []
+  }
+
+  private _syncWithReadwise = async (
+    highlights: ReadwiseHighlight[]
   ): Promise<boolean> => {
-    const url = `${env.readwise.apiUrl || READWISE_API_URL}/highlights`
-    try {
-      const response = await axios.post(
-        url,
-        {
-          highlights,
+    const response = await this._axios.post(
+      '/highlights',
+      {
+        highlights,
+      },
+      {
+        headers: {
+          ...this._headers,
+          Authorization: `Token ${this.token}`,
         },
-        {
-          headers: {
-            Authorization: `Token ${token}`,
-            ContentType: 'application/json',
-          },
-        }
-      )
-      return response.status === 200
-    } catch (error) {
-      if (
-        axios.isAxiosError(error) &&
-        error.response?.status === 429 &&
-        retryCount < 3
-      ) {
-        console.log('Readwise API rate limit exceeded, retrying...')
-        // wait for Retry-After seconds in the header if rate limited
-        // max retry count is 3
-        const retryAfter = error.response?.headers['retry-after'] || '10' // default to 10 seconds
-        await wait(parseInt(retryAfter, 10) * 1000)
-        return this.syncWithReadwise(token, highlights, retryCount + 1)
       }
-      console.log('Error creating highlights in Readwise', error)
-      return false
-    }
+    )
+    return response.status === 200
   }
 }

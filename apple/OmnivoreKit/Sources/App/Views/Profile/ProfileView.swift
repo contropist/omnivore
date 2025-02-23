@@ -18,16 +18,16 @@ import Views
   }
 
   func loadProfileData(dataService: DataService) async {
-    if let currentViewer = dataService.currentViewer {
-      loadProfileCardData(viewer: currentViewer)
-      return
+    if let currentViewer = dataService.currentViewer,
+       let name = currentViewer.name,
+       let username = currentViewer.username
+    {
+      loadProfileCardData(name: name, username: username, profileImageURL: currentViewer.profileImageURL)
     }
 
-    guard let viewerObjectID = try? await dataService.fetchViewer() else { return }
-
-    await dataService.viewContext.perform {
-      if let viewer = dataService.viewContext.object(with: viewerObjectID) as? Viewer {
-        self.loadProfileCardData(viewer: viewer)
+    if profileCardData.name.isEmpty {
+      if let viewer = try? await dataService.fetchViewer() {
+        loadProfileCardData(name: viewer.name, username: viewer.username, profileImageURL: viewer.profileImageURL)
       }
     }
   }
@@ -41,16 +41,17 @@ import Views
     do {
       try await dataService.deleteAccount(userID: currentViewer.unwrappedUserID)
       authenticator.logout(dataService: dataService, isAccountDeletion: true)
+      EventTracker.reset()
     } catch {
       deleteAccountErrorMessage = "We were unable to delete your account."
     }
   }
 
-  private func loadProfileCardData(viewer: Viewer) {
+  private func loadProfileCardData(name: String, username: String, profileImageURL: String?) {
     profileCardData = ProfileCardData(
-      name: viewer.unwrappedName,
-      username: viewer.unwrappedUsername,
-      imageURL: viewer.profileImageURL.flatMap { URL(string: $0) }
+      name: name,
+      username: username,
+      imageURL: profileImageURL.flatMap { URL(string: $0) }
     )
   }
 }
@@ -63,34 +64,36 @@ struct ProfileView: View {
 
   @StateObject private var viewModel = ProfileContainerViewModel()
 
+  @State var shouldScrollToTop = false
   @State private var showLogoutConfirmation = false
 
   var body: some View {
     #if os(iOS)
-      Form {
-        innerBody
+      List {
+        innerBody.tag("TOP")
       }
-      .navigationTitle(LocalText.genericProfile)
-      .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .navigationBarTrailing) {
-          dismissButton
-        }
+        toolbarItems
       }
     #elseif os(macOS)
       List {
         innerBody
       }
       .listStyle(InsetListStyle())
-      .frame(minWidth: 400, minHeight: 400)
+      .frame(minWidth: 400, minHeight: 600)
     #endif
   }
 
-  var dismissButton: some View {
-    Button(
-      action: { dismiss() },
-      label: { Text(LocalText.genericClose) }
-    )
+  var toolbarItems: some ToolbarContent {
+    Group {
+      ToolbarItem(placement: .barLeading) {
+        VStack(alignment: .leading) {
+          Text(LocalText.genericProfile)
+            .font(Font.system(size: 24, weight: .semibold))
+        }
+        .frame(maxWidth: .infinity, alignment: .bottomLeading)
+      }
+    }
   }
 
   private var accountSection: some View {
@@ -123,6 +126,7 @@ struct ProfileView: View {
     Group {
       Section {
         ProfileCard(data: viewModel.profileCardData)
+          .tag("PROFILE")
           .task {
             await viewModel.loadProfileData(dataService: dataService)
           }
@@ -132,6 +136,9 @@ struct ProfileView: View {
 
       #if os(iOS)
         Section {
+          NavigationLink(destination: ReaderSettingsView()) {
+            Text(LocalText.readerSettingsGeneric)
+          }
           NavigationLink(destination: PushNotificationSettingsView()) {
             Text(LocalText.pushNotificationsGeneric)
           }
@@ -151,27 +158,53 @@ struct ProfileView: View {
           label: { Text(LocalText.documentationGeneric) }
         )
 
-        #if os(iOS)
-          Button(
-            action: { DataService.showIntercomMessenger?() },
-            label: { Text(LocalText.feedbackGeneric) }
-          )
-        #endif
+#if os(iOS)
+        Button(
+          action: { DataService.showIntercomMessenger?() },
+          label: { Text(LocalText.feedbackGeneric) }
+        )
+#endif
 
-        NavigationLink(
-          destination: BasicWebAppView.privacyPolicyWebView(baseURL: dataService.appEnvironment.webAppBaseURL)
-        ) {
-          Text(LocalText.privacyPolicyGeneric)
-        }
+        Button(
+          action: {
+            if let url = URL(string: "https://apps.apple.com/app/id1564031042?action=write-review") {
+              openURL(url)
+            }
+          },
+          label: { Text("Review Omnivore") }
+        )
 
-        NavigationLink(
-          destination: BasicWebAppView.termsConditionsWebView(baseURL: dataService.appEnvironment.webAppBaseURL)
-        ) {
-          Text(LocalText.termsAndConditionsGeneric)
-        }
+        Button(
+          action: {
+            if let url = URL(string: "https://discord.gg/h2z5rppzz9") {
+              openURL(url)
+            }
+          },
+          label: { Text("Join community on Discord") }
+        )
       }
 
-      Section(footer: Text(viewModel.appVersionString)) {
+      Section {
+        Button(
+          action: {
+            if let url = URL(string: "https://omnivore.app/privacy") {
+              openURL(url)
+            }
+          },
+          label: { Text(LocalText.privacyPolicyGeneric) }
+        )
+
+        Button(
+          action: {
+            if let url = URL(string: "https://omnivore.app/terms") {
+              openURL(url)
+            }
+          },
+          label: { Text(LocalText.termsAndConditionsGeneric) }
+        )
+      }
+
+      Section(footer: Text(viewModel.appVersionString + " - \(dataService.appEnvironment.name)")) {
         NavigationLink(
           destination: ManageAccountView()
         ) {
@@ -188,7 +221,7 @@ struct ProfileView: View {
               primaryButton: .destructive(Text(LocalText.genericConfirm)) {
                 dismiss()
                 DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) {
-                  authenticator.logout(dataService: dataService)
+                  authenticator.beginLogout()
                 }
               },
               secondaryButton: .cancel()
@@ -201,11 +234,11 @@ struct ProfileView: View {
 
 extension BasicWebAppView {
   static func privacyPolicyWebView(baseURL: URL) -> BasicWebAppView {
-    omnivoreWebView(path: "/app/privacy", baseURL: baseURL)
+    omnivoreWebView(path: "/privacy", baseURL: baseURL)
   }
 
   static func termsConditionsWebView(baseURL: URL) -> BasicWebAppView {
-    omnivoreWebView(path: "/app/terms", baseURL: baseURL)
+    omnivoreWebView(path: "/terms", baseURL: baseURL)
   }
 
   private static func omnivoreWebView(path: String, baseURL: URL) -> BasicWebAppView {

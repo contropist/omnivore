@@ -35,7 +35,7 @@
               pasteBoard.writeObjects([highlightParams.quote as NSString])
             #endif
 
-            Snackbar.show(message: "Highlight copied")
+            Snackbar.show(message: "Highlight copied", dismissAfter: 2000)
           },
           label: { Label("Copy", systemImage: "doc.on.doc") }
         )
@@ -129,6 +129,7 @@
                 .padding()
             }
           )
+          .buttonStyle(.plain)
           .frame(width: 16, height: 16, alignment: .center)
           .onTapGesture { isContextMenuOpen = true }
         }
@@ -196,6 +197,7 @@
             showErrorAlertMessage: $showErrorAlertMessage
           )
         }
+        .navigationViewStyle(StackNavigationViewStyle())
       }
       .formSheet(isPresented: $showShareView) {
         ShareSheet(activityItems: [viewModel.highlightAsMarkdown(item: self.highlightParams)])

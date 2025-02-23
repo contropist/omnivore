@@ -1,4 +1,7 @@
-import { ArticleAttributes } from '../../../lib/networking/queries/useGetArticleQuery'
+import {
+  ArticleAttributes,
+  useUpdateItemReadStatus,
+} from '../../../lib/networking/library_items/useLibraryItems'
 import { Box } from '../../elements/LayoutPrimitives'
 import { v4 as uuidv4 } from 'uuid'
 import { nanoid } from 'nanoid'
@@ -7,17 +10,24 @@ import { isDarkTheme } from '../../../lib/themeUpdater'
 import PSPDFKit from 'pspdfkit'
 import { Instance, HighlightAnnotation, List, Annotation, Rect } from 'pspdfkit'
 import type { Highlight } from '../../../lib/networking/fragments/highlightFragment'
-import { createHighlightMutation } from '../../../lib/networking/mutations/createHighlightMutation'
-import { deleteHighlightMutation } from '../../../lib/networking/mutations/deleteHighlightMutation'
-import { articleReadingProgressMutation } from '../../../lib/networking/mutations/articleReadingProgressMutation'
-import { mergeHighlightMutation } from '../../../lib/networking/mutations/mergeHighlightMutation'
-import { useCanShareNative } from '../../../lib/hooks/useCanShareNative'
 import { pspdfKitKey } from '../../../lib/appConfig'
-import { NotebookModal } from './NotebookModal'
 import { HighlightNoteModal } from './HighlightNoteModal'
 import { showErrorToast } from '../../../lib/toastHelpers'
-import { HEADER_HEIGHT } from '../homeFeed/HeaderSpacer'
+import { DEFAULT_HEADER_HEIGHT } from '../homeFeed/HeaderSpacer'
 import { UserBasicData } from '../../../lib/networking/queries/useGetViewerQuery'
+import 'react-sliding-pane/dist/react-sliding-pane.css'
+import { NotebookContent } from './Notebook'
+import { NotebookHeader } from './NotebookHeader'
+import useWindowDimensions from '../../../lib/hooks/useGetWindowDimensions'
+import { ResizableSidebar } from './ResizableSidebar'
+import { DEFAULT_HOME_PATH } from '../../../lib/navigations'
+import {
+  useCreateHighlight,
+  useDeleteHighlight,
+  useMergeHighlight,
+  useUpdateHighlight,
+} from '../../../lib/networking/highlights/useItemHighlights'
+import { useRouter } from 'next/router'
 
 export type PdfArticleContainerProps = {
   viewer: UserBasicData
@@ -29,44 +39,18 @@ export type PdfArticleContainerProps = {
 export default function PdfArticleContainer(
   props: PdfArticleContainerProps
 ): JSX.Element {
+  const router = useRouter()
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const [shareTarget, setShareTarget] = useState<Highlight | undefined>(
-    undefined
-  )
   const [notebookKey, setNotebookKey] = useState<string>(uuidv4())
   const [noteTarget, setNoteTarget] = useState<Highlight | undefined>(undefined)
-  const [noteTargetPageIndex, setNoteTargetPageIndex] = useState<
-    number | undefined
-  >(undefined)
+  const [noteTargetPageIndex, setNoteTargetPageIndex] =
+    useState<number | undefined>(undefined)
   const highlightsRef = useRef<Highlight[]>([])
-  const canShareNative = useCanShareNative()
-
-  // const getHighlightURL = useCallback(
-  //   (highlightID: string): string =>
-  //     `${webBaseURL}/${props.viewerUsername}/${props.article.slug}/highlights/${highlightID}`,
-  //   [props.article.slug, props.viewerUsername]
-  // )
-
-  // const nativeShare = useCallback(
-  //   async (highlightID: string, title: string) => {
-  //     await navigator?.share({
-  //       title: title,
-  //       url: getHighlightURL(highlightID),
-  //     })
-  //   },
-  //   [getHighlightURL]
-  // )
-
-  // const handleOpenShare = useCallback(
-  //   (highlight: Highlight) => {
-  //     if (canShareNative) {
-  //       nativeShare(highlight.shortId, props.article.title)
-  //     } else {
-  //       setShareTarget(highlight)
-  //     }
-  //   },
-  //   [nativeShare, canShareNative, props.article.title]
-  // )
+  const createHighlight = useCreateHighlight()
+  const deleteHighlight = useDeleteHighlight()
+  const mergeHighlight = useMergeHighlight()
+  const updateHighlight = useUpdateHighlight()
+  const updateItemReadStatus = useUpdateItemReadStatus()
 
   const annotationOmnivoreId = (annotation: Annotation): string | undefined => {
     if (
@@ -92,7 +76,12 @@ export default function PdfArticleContainer(
         'spacer',
         'search',
         'export-pdf',
+        'sidebar-bookmarks',
+        'sidebar-thumbnails',
+        'sidebar-document-outline',
       ]
+
+      console.log('PSPDFKit.defaultToolbarItems', PSPDFKit.defaultToolbarItems)
       const toolbarItems = PSPDFKit.defaultToolbarItems.filter(
         (i) => ALLOWED_TOOLBAR_ITEM_TYPES.indexOf(i.type) !== -1
       )
@@ -136,7 +125,11 @@ export default function PdfArticleContainer(
               .delete(annotation)
               .then(() => {
                 if (annotationId) {
-                  return deleteHighlightMutation(annotationId)
+                  return deleteHighlight.mutateAsync({
+                    itemId: props.article.id,
+                    slug: props.article.slug,
+                    highlightId: annotationId,
+                  })
                 }
               })
               .then(() => {
@@ -205,7 +198,23 @@ export default function PdfArticleContainer(
         blendMode: PSPDFKit.BlendMode.multiply,
       }
 
-      instance = await PSPDFKit.load({
+      const initialPage = () => {
+        const highlightHref = window.location.hash
+          ? window.location.hash.split('#')[1]
+          : null
+        if (highlightHref) {
+          // find the page index if possible
+          const highlight = props.article.highlights?.find(
+            (h) => h.id === highlightHref
+          )
+          if (highlight) {
+            return highlight.highlightPositionAnchorIndex
+          }
+        }
+        return props.article.readingProgressAnchorIndex
+      }
+
+      const config = {
         container: container || '.pdf-container',
         toolbarItems,
         annotationPresets,
@@ -217,9 +226,12 @@ export default function PdfArticleContainer(
         annotationTooltipCallback: annotationTooltipCallback,
         initialViewState: new PSPDFKit.ViewState({
           zoom: PSPDFKit.ZoomMode.FIT_TO_WIDTH,
-          currentPageIndex: props.article.readingProgressAnchorIndex || 0,
+          currentPageIndex: initialPage() || 0,
         }),
-      })
+      }
+
+      instance = await PSPDFKit.load(config)
+      console.log('created PDF instance', instance)
 
       instance.addEventListener('annotations.willChange', async (event) => {
         const annotation = event.annotations.get(0)
@@ -231,13 +243,17 @@ export default function PdfArticleContainer(
         }
         const annotationId = annotationOmnivoreId(annotation)
         if (annotationId) {
-          await deleteHighlightMutation(annotationId)
+          await deleteHighlight.mutateAsync({
+            itemId: props.article.id,
+            slug: props.article.slug,
+            highlightId: annotationId,
+          })
         }
       })
 
       // Store the highlights in the highlightsRef and apply them to the PDF
-      highlightsRef.current = props.article.highlights
-      for (const highlight of props.article.highlights.filter(
+      highlightsRef.current = props.article.highlights ?? []
+      for (const highlight of (props.article.highlights ?? []).filter(
         (h) => h.type == 'HIGHLIGHT'
       )) {
         const patch = JSON.parse(highlight.patch)
@@ -245,7 +261,9 @@ export default function PdfArticleContainer(
           patch.customData.omnivoreHighight.annotation = highlight.annotation
         }
 
-        const annotation = PSPDFKit.Annotations.fromSerializableObject(patch)
+        const annotation = PSPDFKit.Annotations.fromSerializableObject(
+          patch
+        ) as Annotation
 
         try {
           await instance.create(annotation)
@@ -339,16 +357,21 @@ export default function PdfArticleContainer(
 
           if (overlapping.size === 0) {
             const positionPercent = positionPercentForAnnotation(annotation)
-            const result = await createHighlightMutation({
-              id: id,
-              shortId: shortId,
-              quote: quote,
-              articleId: props.article.id,
-              prefix: surroundingText.prefix,
-              suffix: surroundingText.suffix,
-              patch: JSON.stringify(serialized),
-              highlightPositionPercent: positionPercent * 100,
-              highlightPositionAnchorIndex: annotation.pageIndex,
+
+            const result = await createHighlight.mutateAsync({
+              itemId: props.article.id,
+              slug: props.article.slug,
+              input: {
+                id: id,
+                shortId: shortId,
+                quote: quote,
+                articleId: props.article.id,
+                prefix: surroundingText.prefix,
+                suffix: surroundingText.suffix,
+                patch: JSON.stringify(serialized),
+                highlightPositionPercent: positionPercent * 100,
+                highlightPositionAnchorIndex: annotation.pageIndex,
+              },
             })
             if (result) {
               highlightsRef.current.push(result)
@@ -384,20 +407,24 @@ export default function PdfArticleContainer(
               (ha) => (ha.customData?.omnivoreHighlight as Highlight).id
             )
             const positionPercent = positionPercentForAnnotation(annotation)
-            const result = await mergeHighlightMutation({
-              quote,
-              id,
-              shortId,
-              patch: JSON.stringify(serialized),
-              prefix: surroundingText.prefix,
-              suffix: surroundingText.suffix,
-              articleId: props.article.id,
-              overlapHighlightIdList: mergedIds.toArray(),
-              highlightPositionPercent: positionPercent * 100,
-              highlightPositionAnchorIndex: annotation.pageIndex,
+            const result = await mergeHighlight.mutateAsync({
+              itemId: props.article.id,
+              slug: props.article.slug,
+              input: {
+                quote,
+                id,
+                shortId,
+                patch: JSON.stringify(serialized),
+                prefix: surroundingText.prefix,
+                suffix: surroundingText.suffix,
+                articleId: props.article.id,
+                overlapHighlightIdList: mergedIds.toArray(),
+                highlightPositionPercent: positionPercent * 100,
+                highlightPositionAnchorIndex: annotation.pageIndex,
+              },
             })
-            if (result) {
-              highlightsRef.current.push(result)
+            if (result && result.highlight) {
+              highlightsRef.current.push(result.highlight)
             }
           }
         }
@@ -410,15 +437,102 @@ export default function PdfArticleContainer(
             100,
             Math.max(0, ((pageIndex + 1) / instance.totalPageCount) * 100)
           )
-          if (percent <= props.article.readingProgressPercent) {
-            return
-          }
-          await articleReadingProgressMutation({
-            id: props.article.id,
-            readingProgressPercent: percent,
-            readingProgressAnchorIndex: pageIndex,
+          await updateItemReadStatus.mutateAsync({
+            itemId: props.article.id,
+            slug: props.article.slug,
+            input: {
+              id: props.article.id,
+              force: true,
+              readingProgressPercent: percent,
+              readingProgressAnchorIndex: pageIndex,
+            },
           })
         }
+      )
+
+      type PossibleInputEventTarget = KeyboardEvent & {
+        nodeName: string
+      }
+
+      function isPossibleInputEventTarget(
+        target: any
+      ): target is PossibleInputEventTarget {
+        return (
+          'nodeName' in target &&
+          typeof target.nodeName == 'string' &&
+          target.nodeName
+        )
+      }
+
+      function keyDownHandler(event: KeyboardEvent) {
+        const inputs = ['input', 'select', 'button', 'textarea']
+
+        if (event.target && isPossibleInputEventTarget(event.target)) {
+          const nodeName = event.target.nodeName.toLowerCase()
+          if (inputs.indexOf(nodeName) != -1) {
+            return
+          }
+        }
+
+        const key = event.key.toLowerCase()
+        switch (key) {
+          case 'o':
+            document.dispatchEvent(new Event('openOriginalArticle'))
+            break
+          case 'u':
+            const navReturn = window.localStorage.getItem('nav-return')
+            if (navReturn) {
+              router.push(navReturn)
+              return
+            }
+            const query = window.sessionStorage.getItem('q')
+            if (query) {
+              router.push(`${DEFAULT_HOME_PATH}?${query}`)
+            } else {
+              router.push(DEFAULT_HOME_PATH)
+            }
+            break
+          case 'e':
+            document.dispatchEvent(new Event('archive'))
+            break
+          case '#':
+            document.dispatchEvent(new Event('delete'))
+            break
+          case 'h':
+            const root = (event.target as HTMLElement).querySelector(
+              '.PSPDFKit-Root'
+            )
+            const highlight = root?.querySelector(
+              '.PSPDFKit-Text-Markup-Inline-Toolbar-Highlight'
+            )
+            if (highlight && highlight?.nodeName == 'BUTTON') {
+              const button = highlight as HTMLButtonElement
+              button.click()
+            }
+            break
+          // case 'n':
+          // TODO: need to set a post creation event here, then
+          // go through the regular highlight creation
+          //   document.dispatchEvent(new Event('annotate'))
+          //   break
+          case 't':
+            props.setShowHighlightsModal(true)
+            break
+          case 'i':
+            document.dispatchEvent(new Event('showEditModal'))
+            break
+        }
+      }
+
+      const isIE11 = navigator.userAgent.indexOf('Trident/') > -1
+      instance.contentDocument.addEventListener(
+        'keydown',
+        keyDownHandler,
+        isIE11
+          ? {
+              capture: true,
+            }
+          : true
       )
     })()
 
@@ -434,7 +548,11 @@ export default function PdfArticleContainer(
           const storedId = annotationOmnivoreId(annotation)
           if (storedId == annotationId) {
             await instance.delete(annotation)
-            await deleteHighlightMutation(annotationId)
+            await deleteHighlight.mutateAsync({
+              itemId: props.article.id,
+              slug: props.article.slug,
+              highlightId: annotationId,
+            })
 
             const highlightIdx = highlightsRef.current.findIndex((value) => {
               return value.id == annotationId
@@ -466,6 +584,15 @@ export default function PdfArticleContainer(
       }
     })
 
+    document.addEventListener('pdfReaderUpdateSettings', () => {
+      const show = localStorage.getItem('reader-show-pdf-tool-bar')
+      const showToolbarbar = show ? JSON.parse(show) == true : false
+
+      instance.setViewState((viewState) =>
+        viewState.set('showToolbar', showToolbarbar)
+      )
+    })
+
     return () => {
       PSPDFKit && container && PSPDFKit.unload(container)
     }
@@ -475,20 +602,22 @@ export default function PdfArticleContainer(
   // the PSPDFKit instance if the theme, article URL, or page URL changes. Everything else
   // should be handled by the PSPDFKit instance callbacks.
 
+  const windowDimensions = useWindowDimensions()
+
   return (
     <Box
       id="article-wrapper"
       css={{
         width: '100%',
-        height: `calc(100vh - ${HEADER_HEIGHT})`,
+        height: `calc(100vh - ${DEFAULT_HEADER_HEIGHT})`,
       }}
     >
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
       {noteTarget && (
         <HighlightNoteModal
           highlight={noteTarget}
-          author={props.article.author ?? ''}
-          title={props.article.title}
+          libraryItemId={props.article.id}
+          libraryItemSlug={props.article.slug}
           onUpdate={(highlight: Highlight) => {
             const savedHighlight = highlightsRef.current.find(
               (other: Highlight) => {
@@ -505,35 +634,28 @@ export default function PdfArticleContainer(
           }}
         />
       )}
-      {props.showHighlightsModal && (
-        <NotebookModal
-          key={notebookKey}
+      <ResizableSidebar
+        isShow={props.showHighlightsModal}
+        onClose={() => {
+          props.setShowHighlightsModal(false)
+        }}
+      >
+        <NotebookHeader
           viewer={props.viewer}
           item={props.article}
-          highlights={highlightsRef.current}
-          onClose={(updatedHighlights, deletedAnnotations) => {
-            console.log(
-              'closed PDF notebook: ',
-              updatedHighlights,
-              deletedAnnotations
-            )
-            deletedAnnotations.forEach((highlight) => {
-              const event = new CustomEvent('deleteHighlightbyId', {
-                detail: highlight.id,
-              })
-              document.dispatchEvent(event)
-            })
-            props.setShowHighlightsModal(false)
-          }}
-          viewHighlightInReader={(highlightId) => {
+          setShowNotebook={props.setShowHighlightsModal}
+        />
+        <NotebookContent
+          viewer={props.viewer}
+          item={props.article}
+          viewInReader={(highlightId) => {
             const event = new CustomEvent('scrollToHighlightId', {
               detail: highlightId,
             })
             document.dispatchEvent(event)
-            props.setShowHighlightsModal(false)
           }}
         />
-      )}
+      </ResizableSidebar>
     </Box>
   )
 }

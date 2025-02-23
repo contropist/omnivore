@@ -3,25 +3,26 @@ import Foundation
 import Models
 
 public extension NSNotification {
-  static let PushJSONArticle = Notification.Name("PushJSONArticle")
-  static let PushReaderItem = Notification.Name("PushReaderItem")
-  static let OperationSuccess = Notification.Name("OperationSuccess")
+  static let PushLibraryItem = Notification.Name("PushLibraryItem")
+  static let SnackBar = Notification.Name("SnackBar")
   static let OperationFailure = Notification.Name("OperationFailure")
   static let ReaderSettingsChanged = Notification.Name("ReaderSettingsChanged")
   static let SpeakingReaderItem = Notification.Name("SpeakingReaderItem")
   static let DisplayProfile = Notification.Name("DisplayProfile")
   static let Logout = Notification.Name("Logout")
+  static let ScrollToTop = Notification.Name("ScrollToTop")
+  static let PerformSync = Notification.Name("PerformSync")
+
+  static var performSyncPublisher: NotificationCenter.Publisher {
+    NotificationCenter.default.publisher(for: PerformSync)
+  }
 
   static var pushFeedItemPublisher: NotificationCenter.Publisher {
-    NotificationCenter.default.publisher(for: PushJSONArticle)
+    NotificationCenter.default.publisher(for: PushLibraryItem)
   }
 
-  static var pushReaderItemPublisher: NotificationCenter.Publisher {
-    NotificationCenter.default.publisher(for: PushReaderItem)
-  }
-
-  static var operationSuccessPublisher: NotificationCenter.Publisher {
-    NotificationCenter.default.publisher(for: OperationSuccess)
+  static var snackBarPublisher: NotificationCenter.Publisher {
+    NotificationCenter.default.publisher(for: SnackBar)
   }
 
   static var operationFailedPublisher: NotificationCenter.Publisher {
@@ -44,6 +45,10 @@ public extension NSNotification {
     NotificationCenter.default.publisher(for: Logout)
   }
 
+  static var scrollToTopPublisher: NotificationCenter.Publisher {
+    NotificationCenter.default.publisher(for: ScrollToTop)
+  }
+
   internal var operationMessage: String? {
     if let message = userInfo?["message"] as? String {
       return message
@@ -51,24 +56,23 @@ public extension NSNotification {
     return nil
   }
 
-  static func pushJSONArticle(article: JSONArticle) {
+  static func pushLibraryItem(folder: String?, libraryItemId: String) {
     NotificationCenter.default.post(
-      name: NSNotification.PushJSONArticle,
+      name: NSNotification.PushLibraryItem,
       object: nil,
-      userInfo: ["article": article]
+      userInfo: [
+        "folder": folder ?? "inbox",
+        "libraryItemId": libraryItemId
+      ]
     )
   }
 
-  static func pushReaderItem(objectID: NSManagedObjectID) {
-    NotificationCenter.default.post(
-      name: NSNotification.PushReaderItem,
-      object: nil,
-      userInfo: ["objectID": objectID]
-    )
-  }
-
-  static func operationSuccess(message: String) {
-    NotificationCenter.default.post(name: NSNotification.OperationSuccess, object: nil, userInfo: ["message": message])
+  static func snackBar(message: String, undoAction: (() -> Void)?, dismissAfter: Int?) {
+    NotificationCenter.default.post(name: NSNotification.SnackBar,
+                                    object: nil,
+                                    userInfo: ["message": message, 
+                                               "undoAction": undoAction as Any,
+                                               "dismissAfter": dismissAfter as Any])
   }
 
   static func operationFailed(message: String) {

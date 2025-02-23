@@ -2,19 +2,25 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/explicit-module-boundary-types */
-import express from 'express'
-import {
-  ArticleSavingRequestStatus,
-  PageType,
-  UploadFileStatus,
-} from '../generated/graphql'
 import cors from 'cors'
-import { env } from '../env'
-import { buildLogger } from '../utils/logger'
+import express from 'express'
 import * as jwt from 'jsonwebtoken'
+import { LibraryItemState } from '../entity/library_item'
+import { Recommendation } from '../entity/recommendation'
+import { UploadFile } from '../entity/upload_file'
+import { env } from '../env'
+import { PageType, UploadFileStatus } from '../generated/graphql'
+import { authTrx } from '../repository'
+import { Claims } from '../resolvers/types'
+import {
+  createOrUpdateLibraryItem,
+  findLibraryItemById,
+  findLibraryItemByUrl,
+  restoreLibraryItem,
+} from '../services/library_item'
+import { addRecommendation } from '../services/recommendation'
+import { getTokenByRequest } from '../utils/auth'
 import { corsConfig } from '../utils/corsConfig'
-import { initModels } from '../server'
-import { kx } from '../datalayer/knex_config'
 import {
   fileNameForFilePath,
   generateSlug,
@@ -22,17 +28,11 @@ import {
   titleForFilePath,
   validateUuid,
 } from '../utils/helpers'
+import { logger } from '../utils/logger'
 import {
   generateUploadFilePathName,
   generateUploadSignedUrl,
 } from '../utils/uploads'
-import { Claims } from '../resolvers/types'
-import { createPage, getPageByParam, updatePage } from '../elastic/pages'
-import { createPubSubClient } from '../datalayer/pubsub'
-import { Recommendation } from '../elastic/types'
-import { addRecommendation } from '../elastic/recommendation'
-
-const logger = buildLogger('app.dispatch')
 
 export function pageRouter() {
   const router = express.Router()
@@ -49,13 +49,8 @@ export function pageRouter() {
     // Get the content type from the query params
     const { url, clientRequestId } = req.query
     const contentType = req.headers['content-type']
-    console.log(
-      'contentType',
-      contentType,
-      'url',
-      url,
-      'clientRequestId',
-      clientRequestId
+    logger.info(
+      `creating page from pdf ${url} ${contentType} ${clientRequestId}`
     )
 
     if (
@@ -63,35 +58,34 @@ export function pageRouter() {
       !isString(contentType) ||
       !isString(clientRequestId)
     ) {
-      console.log(
-        'creating page from pdf failed',
+      logger.info('creating page from pdf failed', {
         url,
         contentType,
-        clientRequestId
-      )
+        clientRequestId,
+      })
       return res.status(400).send({ errorCode: 'BAD_DATA' })
     }
 
     if (!validateUuid(clientRequestId)) {
-      console.log('creating page from pdf failed  invalid uuid')
+      logger.info('creating page from pdf failed  invalid uuid')
       return res.status(400).send({ errorCode: 'BAD_DATA' })
-    }
-
-    const models = initModels(kx, false)
-    const ctx = {
-      uid: claims.uid,
-      pubsub: createPubSubClient(),
     }
 
     const title = titleForFilePath(url)
     const fileName = fileNameForFilePath(url)
-    const uploadFileData = await models.uploadFile.create({
-      url: url,
-      userId: claims.uid,
-      fileName: fileName,
-      status: UploadFileStatus.Initialized,
-      contentType: 'application/pdf',
-    })
+    const uploadFileData = await authTrx(
+      (t) =>
+        t.getRepository(UploadFile).save({
+          url,
+          userId: claims.uid,
+          fileName,
+          status: UploadFileStatus.Initialized,
+          contentType: 'application/pdf',
+        }),
+      {
+        uid: claims.uid,
+      }
+    )
 
     const uploadFilePathName = generateUploadFilePathName(
       uploadFileData.id,
@@ -103,48 +97,27 @@ export function pageRouter() {
       'application/pdf'
     )
 
-    const page = await getPageByParam({
-      userId: claims.uid,
-      url: url,
-    })
+    const item = await findLibraryItemByUrl(url, claims.uid)
 
-    if (page) {
-      console.log('updating page')
-      await updatePage(
-        page.id,
-        {
-          savedAt: new Date(),
-          archivedAt: null,
-        },
-        ctx
-      )
+    if (item) {
+      await restoreLibraryItem(item.id, claims.uid)
     } else {
-      console.log('creating page')
-      const pageId = await createPage(
+      await createOrUpdateLibraryItem(
         {
-          url: signedUrl,
+          originalUrl: signedUrl,
           id: clientRequestId,
-          userId: claims.uid,
-          title: title,
-          hash: uploadFilePathName,
-          content: '',
-          pageType: PageType.File,
-          uploadFileId: uploadFileData.id,
+          user: { id: claims.uid },
+          title,
+          itemType: PageType.File,
+          uploadFile: { id: uploadFileData.id },
           slug: generateSlug(uploadFilePathName),
-          createdAt: new Date(),
-          savedAt: new Date(),
-          readingProgressPercent: 0,
-          readingProgressAnchorIndex: 0,
-          state: ArticleSavingRequestStatus.Processing,
+          state: LibraryItemState.Processing,
         },
-        ctx
+        claims.uid
       )
-      if (!pageId) {
-        return res.sendStatus(500)
-      }
     }
 
-    console.log('redirecting to signed URL', signedUrl)
+    logger.info(`redirecting to signed URL: ${signedUrl}`)
     return res.redirect(signedUrl)
   })
 
@@ -157,47 +130,43 @@ export function pageRouter() {
     '/recommend',
     cors<express.Request>(corsConfig),
     async (req, res) => {
-      const token = req?.cookies?.auth || req?.headers?.authorization
+      const token = getTokenByRequest(req)
       if (!token || !jwt.verify(token, env.server.jwtSecret)) {
         return res.status(401).send({ errorCode: 'UNAUTHORIZED' })
       }
       const claims = jwt.decode(token) as Claims
 
-      const { userId, pageId, recommendation, highlightIds } = req.body as {
+      const { userId, itemId, recommendation, highlightIds } = req.body as {
         userId: string
-        pageId: string
+        itemId: string
         recommendation: Recommendation
         highlightIds?: string[]
       }
-      if (!userId || !pageId || !recommendation) {
+      if (!userId || !itemId || !recommendation) {
         return res.status(400).send({ errorCode: 'BAD_DATA' })
       }
 
-      const ctx = {
-        uid: userId,
-        pubsub: createPubSubClient(),
-      }
-
-      const page = await getPageByParam({
-        userId: claims.uid,
-        _id: pageId,
+      const item = await findLibraryItemById(itemId, claims.uid, {
+        relations: {
+          highlights: true,
+        },
       })
-      if (!page) {
+      if (!item) {
         return res.status(404).send({ errorCode: 'NOT_FOUND' })
       }
 
-      const recommendedPageId = await addRecommendation(
-        ctx,
-        page,
+      const recommendedItem = await addRecommendation(
+        item,
         recommendation,
+        userId,
         highlightIds
       )
-      if (!recommendedPageId) {
+      if (!recommendedItem) {
         logger.error('Failed to add recommendation to page')
         return res.sendStatus(500)
       }
 
-      return res.send({ recommendedPageId })
+      return res.send('OK')
     }
   )
 

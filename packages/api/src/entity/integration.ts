@@ -14,14 +14,24 @@ export enum IntegrationType {
   Import = 'IMPORT',
 }
 
+export enum ImportItemState {
+  Unread = 'UNREAD',
+  Unarchived = 'UNARCHIVED',
+  Archived = 'ARCHIVED',
+  All = 'ALL',
+}
+
 @Entity({ name: 'integrations' })
 export class Integration {
   @PrimaryGeneratedColumn('uuid')
   id!: string
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'CASCADE', eager: true })
   @JoinColumn({ name: 'user_id' })
   user!: User
+
+  @Column('uuid', { name: 'user_id' })
+  userId!: string
 
   @Column('varchar', { length: 40 })
   name!: string
@@ -49,4 +59,10 @@ export class Integration {
 
   @Column('text', { nullable: true })
   taskName?: string | null
+
+  @Column('enum', { enum: ImportItemState, nullable: true })
+  importItemState?: ImportItemState | null
+
+  @Column('jsonb', { nullable: true })
+  settings?: any
 }

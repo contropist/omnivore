@@ -1,85 +1,88 @@
-import { Knex } from 'knex'
-import { PubsubClient } from '../datalayer/pubsub'
-import { UserData } from '../datalayer/user/model'
+import { LibraryItemState } from '../entity/library_item'
+import { User } from '../entity/user'
 import { homePageURL } from '../env'
-import {
-  ArticleSavingRequestStatus,
-  SaveErrorCode,
-  SaveFileInput,
-  SaveResult,
-} from '../generated/graphql'
-import { DataModels } from '../resolvers/types'
-import { createLabels } from './labels'
-import { updatePage } from '../elastic/pages'
+import { SaveErrorCode, SaveFileInput, SaveResult } from '../generated/graphql'
+import { logger } from '../utils/logger'
 import { getStorageFileDetails } from '../utils/uploads'
-
-type SaveContext = {
-  pubsub: PubsubClient
-  models: DataModels
-  authTrx: <TResult>(
-    cb: (tx: Knex.Transaction) => TResult,
-    userRole?: string
-  ) => Promise<TResult>
-  uid: string
-}
+import { createAndAddLabelsToLibraryItem } from './labels'
+import { findLibraryItemById, updateLibraryItem } from './library_item'
+import { findUploadFileById, setFileUploadComplete } from './upload_file'
 
 export const saveFile = async (
-  ctx: SaveContext,
-  saver: UserData,
-  input: SaveFileInput
+  input: SaveFileInput,
+  user: User
 ): Promise<SaveResult> => {
-  console.log('saving file with input', input)
-  const pageId = input.clientRequestId
-  const uploadFile = await ctx.models.uploadFile.getWhere({
-    id: input.uploadFileId,
-    userId: saver.id,
-  })
+  const libraryItem = await findLibraryItemById(input.clientRequestId, user.id)
+  if (!libraryItem) {
+    return {
+      __typename: 'SaveError',
+      errorCodes: [SaveErrorCode.Unauthorized],
+    }
+  }
 
+  const uploadFile = await findUploadFileById(input.uploadFileId)
   if (!uploadFile) {
     return {
+      __typename: 'SaveError',
       errorCodes: [SaveErrorCode.Unauthorized],
     }
   }
 
   await getStorageFileDetails(input.uploadFileId, uploadFile.fileName)
 
-  const uploadFileData = await ctx.authTrx(async (tx) => {
-    return ctx.models.uploadFile.setFileUploadComplete(input.uploadFileId, tx)
-  })
+  const uploadFileData = await setFileUploadComplete(input.uploadFileId)
 
   if (!uploadFileData) {
     return {
+      __typename: 'SaveError',
       errorCodes: [SaveErrorCode.Unknown],
     }
   }
 
-  // save state
-  const archivedAt =
-    input.state === ArticleSavingRequestStatus.Archived ? new Date() : null
-  // add labels to page
-  const labels = input.labels
-    ? await createLabels({ ...ctx, uid: saver.id }, input.labels)
-    : undefined
-  if (input.state || input.labels) {
-    const updated = await updatePage(
-      pageId,
+  try {
+    const existingLabels = libraryItem.labelNames || []
+    const newLabels = input.labels?.map((l) => l.name) || []
+    const combinedLabels = [...new Set([...existingLabels, ...newLabels])]
+
+    await updateLibraryItem(
+      input.clientRequestId,
       {
-        archivedAt,
-        labels,
+        state:
+          (input.state as unknown as LibraryItemState) ||
+          LibraryItemState.Succeeded,
+        folder: input.folder || undefined,
+        savedAt: input.savedAt ? new Date(input.savedAt) : undefined,
+        publishedAt: input.publishedAt
+          ? new Date(input.publishedAt)
+          : undefined,
+        labelNames: combinedLabels,
       },
-      ctx
+      user.id
     )
-    if (!updated) {
-      console.log('error updating page', pageId)
-      return {
-        errorCodes: [SaveErrorCode.Unknown],
-      }
+
+    // add labels to item
+    await createAndAddLabelsToLibraryItem(
+      input.clientRequestId,
+      user.id,
+      input.labels,
+      input.subscription
+    )
+  } catch (error) {
+    logger.error('Failed to update library item', {
+      error,
+      clientRequestId: input.clientRequestId,
+      userId: user.id,
+    })
+
+    return {
+      __typename: 'SaveError',
+      errorCodes: [SaveErrorCode.Unknown],
     }
   }
 
   return {
     clientRequestId: input.clientRequestId,
-    url: `${homePageURL()}/${saver.profile.username}/links/${
+    url: `${homePageURL()}/${user.profile.username}/links/${
       input.clientRequestId
     }`,
   }

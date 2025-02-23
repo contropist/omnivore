@@ -1,15 +1,18 @@
 import { Storage } from '@google-cloud/storage'
 import { Readability } from '@omnivore/readability'
+import { RedisDataSource } from '@omnivore/utils'
 import * as Sentry from '@sentry/serverless'
 import axios from 'axios'
+import 'dotenv/config'
 import * as jwt from 'jsonwebtoken'
 import { Stream } from 'node:stream'
 import * as path from 'path'
 import { promisify } from 'util'
 import { v4 as uuid } from 'uuid'
 import { importCsv } from './csv'
+import { enqueueFetchContentJob, queueEmailJob } from './job'
 import { importMatterArchive } from './matterHistory'
-import { CONTENT_FETCH_URL, createCloudTask, emailUserUrl } from './task'
+import { ImportStatus, updateMetrics } from './metrics'
 
 export enum ArticleSavingRequestStatus {
   Failed = 'FAILED',
@@ -35,7 +38,9 @@ export type UrlHandler = (
   ctx: ImportContext,
   url: URL,
   state?: ArticleSavingRequestStatus,
-  labels?: string[]
+  labels?: string[],
+  savedAt?: Date,
+  publishedAt?: Date
 ) => Promise<void>
 export type ContentHandler = (
   ctx: ImportContext,
@@ -51,9 +56,21 @@ export type ImportContext = {
   countFailed: number
   urlHandler: UrlHandler
   contentHandler: ContentHandler
+  redisDataSource: RedisDataSource
+  taskId: string
+  source: string
 }
 
 type importHandlerFunc = (ctx: ImportContext, stream: Stream) => Promise<void>
+
+interface UpdateMetricsRequest {
+  taskId: string
+  status: ImportStatus
+}
+
+function isUpdateMetricsRequest(body: any): body is UpdateMetricsRequest {
+  return 'taskId' in body && 'status' in body
+}
 
 interface StorageEvent {
   name: string
@@ -76,56 +93,66 @@ const shouldHandle = (data: StorageEvent) => {
 }
 
 const importURL = async (
+  redisDataSource: RedisDataSource,
   userId: string,
   url: URL,
   source: string,
+  taskId: string,
   state?: ArticleSavingRequestStatus,
-  labels?: string[]
+  labels?: string[],
+  savedAt?: Date,
+  publishedAt?: Date
 ): Promise<string | undefined> => {
-  return createCloudTask(CONTENT_FETCH_URL, {
-    userId,
-    source,
+  return enqueueFetchContentJob(redisDataSource, {
     url: url.toString(),
-    saveRequestId: uuid(),
+    users: [{ id: userId, libraryItemId: '' }],
+    source,
+    taskId,
     state,
     labels: labels?.map((l) => {
       return { name: l }
     }),
+    savedAt: savedAt?.toISOString(),
+    publishedAt: publishedAt?.toISOString(),
   })
 }
 
-const createEmailCloudTask = async (userId: string, payload: unknown) => {
-  if (!process.env.JWT_SECRET) {
-    throw 'Envrionment not setup correctly'
-  }
-
-  const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 // 1 day
-  const authToken = (await signToken(
-    { uid: userId, exp },
-    process.env.JWT_SECRET
-  )) as string
-  const headers = {
-    Cookie: `auth=${authToken}`,
-  }
-
-  return createCloudTask(emailUserUrl(), payload, headers)
-}
-
-const sendImportFailedEmail = async (userId: string) => {
-  return createEmailCloudTask(userId, {
+const sendImportFailedEmail = async (
+  redisDataSource: RedisDataSource,
+  userId: string
+) => {
+  return queueEmailJob(redisDataSource, {
+    userId,
     subject: 'Your Omnivore import failed.',
-    body: `There was an error importing your file. Please ensure you uploaded the correct file type, if you need help, please email feedback@omnivore.app`,
+    html: `There was an error importing your file. Please ensure you uploaded the correct file type, if you need help, please email feedback@omnivore.app`,
   })
 }
 
-const sendImportCompletedEmail = async (
+export const sendImportStartedEmail = async (
+  redisDataSource: RedisDataSource,
   userId: string,
   urlsEnqueued: number,
   urlsFailed: number
 ) => {
-  return createEmailCloudTask(userId, {
-    subject: 'Your Omnivore import has completed processing',
-    body: `${urlsEnqueued} URLs have been processed and should be available in your library. ${urlsFailed} URLs failed to be parsed.`,
+  return queueEmailJob(redisDataSource, {
+    userId,
+    subject: 'Your Omnivore import has started',
+    html: `We have started processing ${urlsEnqueued} URLs. ${urlsFailed} URLs are invalid.`,
+  })
+}
+
+export const sendImportCompletedEmail = async (
+  redisDataSource: RedisDataSource,
+  userId: string,
+  urlsImported: number,
+  urlsFailed: number
+) => {
+  return queueEmailJob(redisDataSource, {
+    userId,
+    subject: 'Your Omnivore import has finished',
+    html: `We have finished processing ${
+      urlsImported + urlsFailed
+    } URLs. ${urlsImported} URLs have been added to your library. ${urlsFailed} URLs failed to be parsed.`,
   })
 }
 
@@ -133,27 +160,48 @@ const handlerForFile = (name: string): importHandlerFunc | undefined => {
   const fileName = path.parse(name).name
   if (fileName.startsWith('MATTER')) {
     return importMatterArchive
-  } else if (fileName.startsWith('URL_LIST')) {
+  } else if (fileName.startsWith('URL_LIST') || fileName.startsWith('POCKET')) {
     return importCsv
   }
 
   return undefined
 }
 
+const importSource = (name: string): string => {
+  const fileName = path.parse(name).name
+  if (fileName.startsWith('MATTER')) {
+    return 'matter-history'
+  }
+  if (fileName.startsWith('URL_LIST')) {
+    return 'csv-importer'
+  }
+  if (fileName.startsWith('POCKET')) {
+    return 'pocket'
+  }
+
+  return 'unknown'
+}
+
 const urlHandler = async (
   ctx: ImportContext,
   url: URL,
   state?: ArticleSavingRequestStatus,
-  labels?: string[]
+  labels?: string[],
+  savedAt?: Date,
+  publishedAt?: Date
 ): Promise<void> => {
   try {
     // Imports are stored in the format imports/<user id>/<type>-<uuid>.csv
     const result = await importURL(
+      ctx.redisDataSource,
       ctx.userId,
       url,
-      'csv-importer',
+      ctx.source,
+      ctx.taskId,
       state,
-      labels && labels.length > 0 ? labels : undefined
+      labels && labels.length > 0 ? labels : undefined,
+      savedAt,
+      publishedAt
     )
     if (!result) {
       return Promise.reject('Failed to import url')
@@ -190,15 +238,29 @@ const sendSavePageMutation = async (userId: string, input: unknown) => {
   })
 
   const auth = (await signToken({ uid: userId }, JWT_SECRET)) as string
-  const response = await axios.post(`${REST_BACKEND_ENDPOINT}/graphql`, data, {
-    headers: {
-      Cookie: `auth=${auth};`,
-      'Content-Type': 'application/json',
-    },
-  })
+  try {
+    const response = await axios.post(
+      `${REST_BACKEND_ENDPOINT}/graphql`,
+      data,
+      {
+        headers: {
+          Cookie: `auth=${auth};`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000, // 30s
+      }
+    )
 
-  /* eslint-disable @typescript-eslint/no-unsafe-member-access */
-  return !!response.data.data.savePage
+    /* eslint-disable @typescript-eslint/no-unsafe-member-access */
+    return !!response.data.data.savePage
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.error('save page mutation error', error.message)
+    } else {
+      console.error(error)
+    }
+    return false
+  }
 }
 
 const contentHandler = async (
@@ -222,7 +284,10 @@ const contentHandler = async (
   return Promise.resolve()
 }
 
-const handleEvent = async (data: StorageEvent) => {
+const handleEvent = async (
+  data: StorageEvent,
+  redisDataSource: RedisDataSource
+) => {
   if (shouldHandle(data)) {
     const handler = handlerForFile(data.name)
     if (!handler) {
@@ -247,20 +312,28 @@ const handleEvent = async (data: StorageEvent) => {
       .file(data.name)
       .createReadStream()
 
-    const ctx = {
+    const ctx: ImportContext = {
       userId,
       countImported: 0,
       countFailed: 0,
       urlHandler,
       contentHandler,
+      redisDataSource,
+      taskId: data.name,
+      source: importSource(data.name),
     }
 
     await handler(ctx, stream)
 
     if (ctx.countImported > 0) {
-      await sendImportCompletedEmail(userId, ctx.countImported, ctx.countFailed)
+      await sendImportStartedEmail(
+        ctx.redisDataSource,
+        userId,
+        ctx.countImported,
+        ctx.countFailed
+      )
     } else {
-      await sendImportFailedEmail(userId)
+      await sendImportFailedEmail(ctx.redisDataSource, userId)
     }
   }
 }
@@ -285,16 +358,90 @@ export const importHandler = Sentry.GCPFunction.wrapHttpFunction(
       const pubSubMessage = req.body.message.data as string
       const obj = getStorageEvent(pubSubMessage)
       if (obj) {
+        // create redis source
+        const redisDataSource = new RedisDataSource({
+          cache: {
+            url: process.env.REDIS_URL,
+            cert: process.env.REDIS_CERT,
+          },
+          mq: {
+            url: process.env.MQ_REDIS_URL,
+            cert: process.env.MQ_REDIS_CERT,
+          },
+        })
+
         try {
-          await handleEvent(obj)
+          await handleEvent(obj, redisDataSource)
         } catch (err) {
           console.log('error handling event', { err, obj })
           throw err
+        } finally {
+          // close redis client
+          await redisDataSource.shutdown()
         }
       }
     } else {
       console.log('no pubsub message')
     }
+    res.send('ok')
+  }
+)
+
+export const importMetricsCollector = Sentry.GCPFunction.wrapHttpFunction(
+  async (req, res) => {
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET not exists')
+      return res.status(500).send({ errorCodes: 'JWT_SECRET_NOT_EXISTS' })
+    }
+    const token = req.headers.authorization
+    if (!token) {
+      return res.status(401).send({ errorCode: 'INVALID_TOKEN' })
+    }
+
+    let userId: string
+
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET) as {
+        uid: string
+      }
+      userId = decoded.uid
+    } catch (e) {
+      console.error('Authentication error:', e)
+      return res.status(401).send({ errorCode: 'UNAUTHENTICATED' })
+    }
+
+    if (!isUpdateMetricsRequest(req.body)) {
+      console.log('Invalid request body')
+      return res.status(400).send('Bad Request')
+    }
+
+    // create redis source
+    const redisDataSource = new RedisDataSource({
+      cache: {
+        url: process.env.REDIS_URL,
+        cert: process.env.REDIS_CERT,
+      },
+      mq: {
+        url: process.env.MQ_REDIS_URL,
+        cert: process.env.MQ_REDIS_CERT,
+      },
+    })
+
+    try {
+      // update metrics
+      await updateMetrics(
+        redisDataSource,
+        userId,
+        req.body.taskId,
+        req.body.status
+      )
+    } catch (error) {
+      console.error('Error updating metrics', error)
+      return res.status(500).send('Error updating metrics')
+    } finally {
+      await redisDataSource.shutdown()
+    }
+
     res.send('ok')
   }
 )

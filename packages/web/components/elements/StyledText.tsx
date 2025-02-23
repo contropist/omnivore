@@ -4,7 +4,7 @@ const textVariants = {
   style: {
     body: {
       fontSize: '$2',
-      lineHeight: '1.25',
+      lineHeight: '1.50',
     },
     logoTitle: {
       fontFamily: 'Inter',
@@ -36,6 +36,22 @@ const textVariants = {
       paddingTop: '4px',
       my: '6px',
       color: '$grayText',
+    },
+    settingsSection: {
+      fontWeight: '600',
+      fontSize: '22px',
+      fontFamily: '$inter',
+      color: '$grayText',
+      m: '0px',
+      marginBlockStart: '0px',
+      marginBlockEnd: '0px',
+    },
+    settingsItem: {
+      fontSize: '13px',
+      fontFamily: '$display',
+      color: '$grayText',
+      marginBlockStart: '0px',
+      marginBlockEnd: '0px',
     },
     userNote: {
       fontSize: '16px',
@@ -146,7 +162,6 @@ const textVariants = {
     },
     navLink: {
       m: 0,
-      fontSize: '$1',
       fontWeight: 400,
       color: '$graySolid',
       cursor: 'pointer',
@@ -193,6 +208,8 @@ const textVariants = {
       fontSize: '12px',
       lineHeight: '20px',
       color: '$thTextSubtle2',
+      marginBlockStart: '0',
+      marginTop: '10px',
     },
     error: {
       color: '$error',

@@ -7,7 +7,6 @@ import Views
 struct WelcomeView: View {
   @EnvironmentObject var dataService: DataService
   @EnvironmentObject var authenticator: Authenticator
-  @Environment(\.horizontalSizeClass) var horizontalSizeClass
   @Environment(\.openURL) var openURL
 
   @StateObject private var viewModel = RegistrationViewModel()
@@ -88,42 +87,69 @@ struct WelcomeView: View {
       Spacer()
     }
     .sheet(isPresented: $showPrivacyModal) {
-      VStack {
-        HStack {
-          Spacer()
-          Button(
-            action: {
-              showPrivacyModal = false
-            },
-            label: {
-              Image(systemName: "xmark.circle").foregroundColor(.appGrayTextContrast)
-            }
-          )
-        }
-        .padding()
+      NavigationView {
         BasicWebAppView.privacyPolicyWebView(baseURL: dataService.appEnvironment.webAppBaseURL)
+        #if os(iOS)
+          .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+              Button(
+                action: {
+                  showPrivacyModal = false
+                },
+                label: {
+                  Text(LocalText.genericClose)
+                }
+              )
+            }
+          }
+        #else
+          .toolbar {
+            Button(
+              action: {
+                showPrivacyModal = false
+              },
+              label: {
+                Text(LocalText.genericClose)
+              }
+            )
+          }
+        #endif
       }
     }
     .sheet(isPresented: $showTermsModal) {
-      VStack {
-        HStack {
-          Spacer()
-          Button(
-            action: {
-              showTermsModal = false
-            },
-            label: {
-              Image(systemName: "xmark.circle").foregroundColor(.appGrayTextContrast)
-            }
-          )
-        }
-        .padding()
+      NavigationView {
         BasicWebAppView.termsConditionsWebView(baseURL: dataService.appEnvironment.webAppBaseURL)
+        #if os(iOS)
+          .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+              Button(
+                action: {
+                  showTermsModal = false
+                },
+                label: {
+                  Text(LocalText.genericClose)
+                }
+              )
+            }
+          }
+        #else
+          .toolbar {
+            Button(
+              action: {
+                showTermsModal = false
+              },
+              label: {
+                Text(LocalText.genericClose)
+              }
+            )
+          }
+        #endif
       }
     }
     .sheet(isPresented: $showAboutPage) {
       if let url = URL(string: "https://omnivore.app/about") {
         SafariView(url: url)
+          .ignoresSafeArea(.all, edges: .bottom)
       }
     }
     .onTapGesture {
@@ -133,6 +159,8 @@ struct WelcomeView: View {
 
   var logoView: some View {
     Image.omnivoreTitleLogo
+      .renderingMode(.template)
+      .foregroundColor(Color.appGrayTextContrast)
       .gesture(
         TapGesture(count: 2)
           .onEnded {
@@ -197,7 +225,7 @@ struct WelcomeView: View {
         if let loginError = viewModel.loginError {
           HStack {
             LoginErrorMessageView(loginError: loginError)
-            Spacer()
+              .frame(maxWidth: 400, alignment: .leading)
           }
         }
       }
@@ -205,7 +233,7 @@ struct WelcomeView: View {
 
   public var body: some View {
     ZStack(alignment: viewModel.registrationState == nil ? .leading : .center) {
-      Color.appBackground
+      Color.themeSolidBackground
         .edgesIgnoringSafeArea(.all)
         .modifier(SizeModifier())
         .onPreferenceChange(SizePreferenceKey.self) {
@@ -249,13 +277,9 @@ struct WelcomeView: View {
         .sheet(isPresented: $showDebugModal) {
           DebugMenuView(selectedEnvironment: $selectedEnvironment)
         }
-        #if os(iOS)
-          .sheet(isPresented: $showAdvancedLogin) {
-            NavigationView {
-              SelfHostSettingsView()
-            }
-          }
-        #endif
+        .sheet(isPresented: $showAdvancedLogin) {
+          SelfHostSettingsView()
+        }
         .alert(deletedAccountConfirmationMessage, isPresented: $authenticator.showAppleRevokeTokenAlert) {
           Button("View Details") {
             openURL(URL(string: "https://support.apple.com/en-us/HT210426")!)
@@ -264,7 +288,6 @@ struct WelcomeView: View {
         }
       }
     }
-    .preferredColorScheme(.light)
     .task { selectedEnvironment = dataService.appEnvironment }
   }
 }

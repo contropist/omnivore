@@ -5,17 +5,22 @@ import SwiftUI
 import Utils
 import Views
 
+@MainActor
 public class ShareExtensionViewModel: ObservableObject {
   @Published public var status: ShareExtensionStatus = .processing
   @Published public var title: String = ""
   @Published public var url: String?
+  @Published public var iconURL: URL?
   @Published public var highlightData: HighlightData?
-  @Published public var linkedItem: LinkedItem?
+  @Published public var linkedItem: Models.LibraryItem?
   @Published public var requestId = UUID().uuidString.lowercased()
   @Published var debugText: String?
+  @Published var noteText: String = ""
 
-  let services = Services()
+  public let services = Services()
   let queue = OperationQueue()
+
+  public init() {}
 
   func handleReadNowAction(extensionContext: NSExtensionContext?) {
     #if os(iOS)
@@ -33,6 +38,12 @@ public class ShareExtensionViewModel: ObservableObject {
     extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
   }
 
+  public func dismissExtension(extensionContext: NSExtensionContext?) {
+    if let extensionContext = extensionContext {
+      extensionContext.completeRequest(returningItems: [], completionHandler: nil)
+    }
+  }
+
   func savePage(extensionContext: NSExtensionContext?) {
     if let extensionContext = extensionContext {
       save(extensionContext)
@@ -47,8 +58,8 @@ public class ShareExtensionViewModel: ObservableObject {
     dataService.archiveLink(objectID: objectID, archived: archived)
   }
 
-  func removeLink(dataService: DataService, objectID: NSManagedObjectID) {
-    dataService.removeLink(objectID: objectID)
+  func removeLibraryItem(dataService: DataService, objectID: NSManagedObjectID) {
+    dataService.removeLibraryItem(objectID: objectID)
   }
 
   func submitTitleEdit(dataService: DataService, itemID: String, title: String, description: String) {
@@ -58,6 +69,22 @@ public class ShareExtensionViewModel: ObservableObject {
       description: description,
       author: nil
     )
+  }
+
+  func saveNote() {
+    if let linkedItem = linkedItem {
+      if let noteHighlight = linkedItem.noteHighlight, let noteHighlightID = noteHighlight.id {
+        services.dataService.updateHighlightAttributes(highlightID: noteHighlightID, annotation: noteText)
+      } else {
+        let createdHighlightId = UUID().uuidString.lowercased()
+        let createdShortId = NanoID.generate(alphabet: NanoID.Alphabet.urlSafe.rawValue, size: 8)
+
+        _ = services.dataService.createNote(shortId: createdShortId,
+                                            highlightID: createdHighlightId,
+                                            articleId: linkedItem.unwrappedID,
+                                            annotation: noteText)
+      }
+    }
   }
 
   #if os(iOS)
@@ -88,9 +115,10 @@ public class ShareExtensionViewModel: ObservableObject {
           let hostname = URL(string: payload.url)?.host ?? ""
 
           switch payload.contentType {
-          case let .html(html: _, title: title, highlightData: highlightData):
+          case let .html(html: _, title: title, iconURL: iconURL, highlightData: highlightData):
             self.title = title ?? ""
             self.url = hostname
+            self.iconURL = iconURL
             self.highlightData = highlightData
           case .none:
             self.url = hostname
@@ -145,7 +173,7 @@ public class ShareExtensionViewModel: ObservableObject {
           localPdfURL: localUrl,
           url: pageScrapePayload.url
         )
-      case let .html(html, title, _):
+      case let .html(html, title, _, _):
         newRequestID = try await services.dataService.createPage(
           id: requestId,
           originalHtml: html,
@@ -183,11 +211,25 @@ public class ShareExtensionViewModel: ObservableObject {
       }
 
       if let objectID = objectID {
-        self.linkedItem = self.services.dataService.viewContext.object(with: objectID) as? LinkedItem
+        self.linkedItem = self.services.dataService.viewContext.object(with: objectID) as? Models.LibraryItem
         if let title = self.linkedItem?.title {
           self.title = title
         }
-        self.url = self.linkedItem?.pageURLString
+        if let iconURL = self.linkedItem?.imageURL {
+          self.iconURL = iconURL
+        }
+        if let noteHighlight = self.linkedItem?.highlights?
+          .compactMap({ $0 as? Highlight })
+          .first(where: { $0.type == "NOTE" }),
+          let noteText = noteHighlight.annotation
+        {
+          self.noteText = noteText
+        }
+        if let urlStr = self.linkedItem?.pageURLString, let hostname = URL(string: urlStr)?.host {
+          self.url = hostname
+        } else {
+          self.url = self.linkedItem?.pageURLString
+        }
       }
     }
   }

@@ -1,4 +1,31 @@
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: SubscriptionRootType
+}
+
 directive @sanitize(allowedTags: [String], maxLength: Int, minLength: Int, pattern: String) on INPUT_FIELD_DEFINITION
+
+type AddDiscoverFeedError {
+  errorCodes: [AddDiscoverFeedErrorCode!]!
+}
+
+enum AddDiscoverFeedErrorCode {
+  BAD_REQUEST
+  CONFLICT
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+input AddDiscoverFeedInput {
+  url: String!
+}
+
+union AddDiscoverFeedResult = AddDiscoverFeedError | AddDiscoverFeedSuccess
+
+type AddDiscoverFeedSuccess {
+  feed: DiscoverFeed!
+}
 
 type AddPopularReadError {
   errorCodes: [AddPopularReadErrorCode!]!
@@ -14,6 +41,13 @@ union AddPopularReadResult = AddPopularReadError | AddPopularReadSuccess
 
 type AddPopularReadSuccess {
   pageId: String!
+}
+
+enum AllowedReply {
+  CONFIRM
+  OKAY
+  SUBSCRIBE
+  YES
 }
 
 type ApiKey {
@@ -69,6 +103,9 @@ type Article {
   contentReader: ContentReader!
   createdAt: Date!
   description: String
+  directionality: DirectionalityType
+  feedContent: String
+  folder: String!
   hasContent: Boolean
   hash: String!
   highlights(input: ArticleHighlightsInput): [Highlight!]!
@@ -100,7 +137,7 @@ type Article {
   title: String!
   unsubHttpUrl: String
   unsubMailTo: String
-  updatedAt: Date!
+  updatedAt: Date
   uploadFileId: ID
   url: String!
   wordsCount: Int
@@ -134,7 +171,7 @@ type ArticleSavingRequest {
   id: ID!
   slug: String!
   status: ArticleSavingRequestStatus!
-  updatedAt: Date!
+  updatedAt: Date
   url: String!
   user: User!
   userId: ID! @deprecated(reason: "userId has been replaced with user")
@@ -154,6 +191,7 @@ union ArticleSavingRequestResult = ArticleSavingRequestError | ArticleSavingRequ
 
 enum ArticleSavingRequestStatus {
   ARCHIVED
+  CONTENT_NOT_FETCHED
   DELETED
   FAILED
   PROCESSING
@@ -188,6 +226,7 @@ type BulkActionError {
 }
 
 enum BulkActionErrorCode {
+  BAD_REQUEST
   UNAUTHORIZED
 }
 
@@ -198,8 +237,12 @@ type BulkActionSuccess {
 }
 
 enum BulkActionType {
+  ADD_LABELS
   ARCHIVE
   DELETE
+  MARK_AS_READ
+  MARK_AS_SEEN
+  MOVE_TO_FOLDER
 }
 
 enum ContentReader {
@@ -224,8 +267,12 @@ enum CreateArticleErrorCode {
 
 input CreateArticleInput {
   articleSavingRequestId: ID
+  folder: String
   labels: [CreateLabelInput!]
   preparedDocument: PreparedDocumentInput
+  publishedAt: Date
+  rssFeedUrl: String
+  savedAt: Date
   skipParsing: Boolean
   source: String
   state: ArticleSavingRequestStatus
@@ -258,6 +305,27 @@ type CreateArticleSuccess {
   created: Boolean!
   createdArticle: Article!
   user: User!
+}
+
+type CreateFolderPolicyError {
+  errorCodes: [CreateFolderPolicyErrorCode!]!
+}
+
+enum CreateFolderPolicyErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+input CreateFolderPolicyInput {
+  action: FolderPolicyAction!
+  afterDays: Int!
+  folder: String!
+}
+
+union CreateFolderPolicyResult = CreateFolderPolicyError | CreateFolderPolicySuccess
+
+type CreateFolderPolicySuccess {
+  policy: FolderPolicy!
 }
 
 type CreateGroupError {
@@ -300,6 +368,7 @@ enum CreateHighlightErrorCode {
 input CreateHighlightInput {
   annotation: String
   articleId: ID!
+  color: String
   highlightPositionAnchorIndex: Int
   highlightPositionPercent: Float
   html: String
@@ -307,6 +376,7 @@ input CreateHighlightInput {
   patch: String
   prefix: String
   quote: String
+  representation: RepresentationType
   sharedAt: Date
   shortId: String!
   suffix: String
@@ -373,10 +443,40 @@ enum CreateNewsletterEmailErrorCode {
   UNAUTHORIZED
 }
 
+input CreateNewsletterEmailInput {
+  description: String
+  folder: String
+  name: String
+}
+
 union CreateNewsletterEmailResult = CreateNewsletterEmailError | CreateNewsletterEmailSuccess
 
 type CreateNewsletterEmailSuccess {
   newsletterEmail: NewsletterEmail!
+}
+
+type CreatePostError {
+  errorCodes: [CreatePostErrorCode!]!
+}
+
+enum CreatePostErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+input CreatePostInput {
+  content: String!
+  highlightIds: [ID!]
+  libraryItemIds: [ID!]!
+  thought: String
+  thumbnail: String
+  title: String!
+}
+
+union CreatePostResult = CreatePostError | CreatePostSuccess
+
+type CreatePostSuccess {
+  post: Post!
 }
 
 type CreateReactionError {
@@ -445,6 +545,47 @@ type DeleteAccountSuccess {
   userID: ID!
 }
 
+type DeleteDiscoverArticleError {
+  errorCodes: [DeleteDiscoverArticleErrorCode!]!
+}
+
+enum DeleteDiscoverArticleErrorCode {
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+input DeleteDiscoverArticleInput {
+  discoverArticleId: ID!
+}
+
+union DeleteDiscoverArticleResult = DeleteDiscoverArticleError | DeleteDiscoverArticleSuccess
+
+type DeleteDiscoverArticleSuccess {
+  id: ID!
+}
+
+type DeleteDiscoverFeedError {
+  errorCodes: [DeleteDiscoverFeedErrorCode!]!
+}
+
+enum DeleteDiscoverFeedErrorCode {
+  BAD_REQUEST
+  CONFLICT
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+input DeleteDiscoverFeedInput {
+  feedId: ID!
+}
+
+union DeleteDiscoverFeedResult = DeleteDiscoverFeedError | DeleteDiscoverFeedSuccess
+
+type DeleteDiscoverFeedSuccess {
+  id: String!
+}
+
 type DeleteFilterError {
   errorCodes: [DeleteFilterErrorCode!]!
 }
@@ -459,6 +600,20 @@ union DeleteFilterResult = DeleteFilterError | DeleteFilterSuccess
 
 type DeleteFilterSuccess {
   filter: Filter!
+}
+
+type DeleteFolderPolicyError {
+  errorCodes: [DeleteFolderPolicyErrorCode!]!
+}
+
+enum DeleteFolderPolicyErrorCode {
+  UNAUTHORIZED
+}
+
+union DeleteFolderPolicyResult = DeleteFolderPolicyError | DeleteFolderPolicySuccess
+
+type DeleteFolderPolicySuccess {
+  success: Boolean!
 }
 
 type DeleteHighlightError {
@@ -515,6 +670,7 @@ type DeleteLabelError {
 
 enum DeleteLabelErrorCode {
   BAD_REQUEST
+  FORBIDDEN
   NOT_FOUND
   UNAUTHORIZED
 }
@@ -539,6 +695,21 @@ union DeleteNewsletterEmailResult = DeleteNewsletterEmailError | DeleteNewslette
 
 type DeleteNewsletterEmailSuccess {
   newsletterEmail: NewsletterEmail!
+}
+
+type DeletePostError {
+  errorCodes: [DeletePostErrorCode!]!
+}
+
+enum DeletePostErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+union DeletePostResult = DeletePostError | DeletePostSuccess
+
+type DeletePostSuccess {
+  success: Boolean!
 }
 
 type DeleteReactionError {
@@ -626,6 +797,121 @@ type DeviceTokensSuccess {
   deviceTokens: [DeviceToken!]!
 }
 
+type DigestConfig {
+  channels: [String]
+}
+
+input DigestConfigInput {
+  channels: [String]
+}
+
+enum DirectionalityType {
+  LTR
+  RTL
+}
+
+type DiscoverFeed {
+  description: String
+  id: ID!
+  image: String
+  link: String!
+  title: String!
+  type: String!
+  visibleName: String
+}
+
+type DiscoverFeedArticle {
+  author: String
+  description: String!
+  feed: String!
+  id: ID!
+  image: String
+  publishedDate: Date
+  savedId: String
+  savedLinkUrl: String
+  siteName: String
+  slug: String!
+  title: String!
+  url: String!
+}
+
+type DiscoverFeedError {
+  errorCodes: [DiscoverFeedErrorCode!]!
+}
+
+enum DiscoverFeedErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+union DiscoverFeedResult = DiscoverFeedError | DiscoverFeedSuccess
+
+type DiscoverFeedSuccess {
+  feeds: [DiscoverFeed]!
+}
+
+type DiscoverTopic {
+  description: String!
+  name: String!
+}
+
+type EditDiscoverFeedError {
+  errorCodes: [EditDiscoverFeedErrorCode!]!
+}
+
+enum EditDiscoverFeedErrorCode {
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+input EditDiscoverFeedInput {
+  feedId: ID!
+  name: String!
+}
+
+union EditDiscoverFeedResult = EditDiscoverFeedError | EditDiscoverFeedSuccess
+
+type EditDiscoverFeedSuccess {
+  id: ID!
+}
+
+type EmptyTrashError {
+  errorCodes: [EmptyTrashErrorCode!]!
+}
+
+enum EmptyTrashErrorCode {
+  UNAUTHORIZED
+}
+
+union EmptyTrashResult = EmptyTrashError | EmptyTrashSuccess
+
+type EmptyTrashSuccess {
+  success: Boolean
+}
+
+enum ErrorCode {
+  BAD_REQUEST
+  FORBIDDEN
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+type ExportToIntegrationError {
+  errorCodes: [ExportToIntegrationErrorCode!]!
+}
+
+enum ExportToIntegrationErrorCode {
+  FAILED_TO_CREATE_TASK
+  UNAUTHORIZED
+}
+
+union ExportToIntegrationResult = ExportToIntegrationError | ExportToIntegrationSuccess
+
+type ExportToIntegrationSuccess {
+  task: Task!
+}
+
 type Feature {
   createdAt: Date!
   expiresAt: Date
@@ -633,7 +919,20 @@ type Feature {
   id: ID!
   name: String!
   token: String!
-  updatedAt: Date!
+  updatedAt: Date
+}
+
+type Feed {
+  author: String
+  createdAt: Date
+  description: String
+  id: ID
+  image: String
+  publishedAt: Date
+  title: String!
+  type: String
+  updatedAt: Date
+  url: String!
 }
 
 type FeedArticle {
@@ -669,14 +968,67 @@ type FeedArticlesSuccess {
   pageInfo: PageInfo!
 }
 
+type FeedEdge {
+  cursor: String!
+  node: Feed!
+}
+
+type FeedsError {
+  errorCodes: [FeedsErrorCode!]!
+}
+
+enum FeedsErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+input FeedsInput {
+  after: String
+  first: Int
+  query: String
+  sort: SortParams
+}
+
+union FeedsResult = FeedsError | FeedsSuccess
+
+type FeedsSuccess {
+  edges: [FeedEdge!]!
+  pageInfo: PageInfo!
+}
+
+type FetchContentError {
+  errorCodes: [FetchContentErrorCode!]!
+}
+
+enum FetchContentErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+union FetchContentResult = FetchContentError | FetchContentSuccess
+
+type FetchContentSuccess {
+  success: Boolean!
+}
+
+enum FetchContentType {
+  ALWAYS
+  NEVER
+  WHEN_EMPTY
+}
+
 type Filter {
+  category: String
   createdAt: Date!
+  defaultFilter: Boolean
   description: String
   filter: String!
+  folder: String
   id: ID!
   name: String!
   position: Int!
-  updatedAt: Date!
+  updatedAt: Date
+  visible: Boolean
 }
 
 type FiltersError {
@@ -692,6 +1044,35 @@ union FiltersResult = FiltersError | FiltersSuccess
 
 type FiltersSuccess {
   filters: [Filter!]!
+}
+
+type FolderPoliciesError {
+  errorCodes: [FolderPoliciesErrorCode!]!
+}
+
+enum FolderPoliciesErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+union FolderPoliciesResult = FolderPoliciesError | FolderPoliciesSuccess
+
+type FolderPoliciesSuccess {
+  policies: [FolderPolicy!]!
+}
+
+type FolderPolicy {
+  action: FolderPolicyAction!
+  afterDays: Int!
+  createdAt: Date!
+  folder: String!
+  id: ID!
+  updatedAt: Date!
+}
+
+enum FolderPolicyAction {
+  ARCHIVE
+  DELETE
 }
 
 type GenerateApiKeyError {
@@ -714,6 +1095,37 @@ union GenerateApiKeyResult = GenerateApiKeyError | GenerateApiKeySuccess
 
 type GenerateApiKeySuccess {
   apiKey: ApiKey!
+}
+
+type GetDiscoverFeedArticleError {
+  errorCodes: [GetDiscoverFeedArticleErrorCode!]!
+}
+
+enum GetDiscoverFeedArticleErrorCode {
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+union GetDiscoverFeedArticleResults = GetDiscoverFeedArticleError | GetDiscoverFeedArticleSuccess
+
+type GetDiscoverFeedArticleSuccess {
+  discoverArticles: [DiscoverFeedArticle]
+  pageInfo: PageInfo!
+}
+
+type GetDiscoverTopicError {
+  errorCodes: [GetDiscoverTopicErrorCode!]!
+}
+
+enum GetDiscoverTopicErrorCode {
+  UNAUTHORIZED
+}
+
+union GetDiscoverTopicResults = GetDiscoverTopicError | GetDiscoverTopicSuccess
+
+type GetDiscoverTopicSuccess {
+  discoverTopics: [DiscoverTopic!]
 }
 
 type GetFollowersError {
@@ -798,8 +1210,25 @@ type GroupsSuccess {
   groups: [RecommendationGroup!]!
 }
 
+type HiddenHomeSectionError {
+  errorCodes: [HiddenHomeSectionErrorCode!]!
+}
+
+enum HiddenHomeSectionErrorCode {
+  BAD_REQUEST
+  PENDING
+  UNAUTHORIZED
+}
+
+union HiddenHomeSectionResult = HiddenHomeSectionError | HiddenHomeSectionSuccess
+
+type HiddenHomeSectionSuccess {
+  section: HomeSection
+}
+
 type Highlight {
   annotation: String
+  color: String
   createdAt: Date!
   createdByMe: Boolean!
   highlightPositionAnchorIndex: Int
@@ -807,17 +1236,24 @@ type Highlight {
   html: String
   id: ID!
   labels: [Label!]
+  libraryItem: Article!
   patch: String
   prefix: String
   quote: String
   reactions: [Reaction!]!
   replies: [HighlightReply!]!
+  representation: RepresentationType!
   sharedAt: Date
   shortId: String!
   suffix: String
   type: HighlightType!
-  updatedAt: Date!
+  updatedAt: Date
   user: User!
+}
+
+type HighlightEdge {
+  cursor: String!
+  node: Highlight!
 }
 
 type HighlightReply {
@@ -825,7 +1261,7 @@ type HighlightReply {
   highlight: Highlight!
   id: ID!
   text: String!
-  updatedAt: Date!
+  updatedAt: Date
   user: User!
 }
 
@@ -837,6 +1273,90 @@ enum HighlightType {
   HIGHLIGHT
   NOTE
   REDACTION
+}
+
+type HighlightsError {
+  errorCodes: [HighlightsErrorCode!]!
+}
+
+enum HighlightsErrorCode {
+  BAD_REQUEST
+}
+
+union HighlightsResult = HighlightsError | HighlightsSuccess
+
+type HighlightsSuccess {
+  edges: [HighlightEdge!]!
+  pageInfo: PageInfo!
+}
+
+type HomeEdge {
+  cursor: String!
+  node: HomeSection!
+}
+
+type HomeError {
+  errorCodes: [HomeErrorCode!]!
+}
+
+enum HomeErrorCode {
+  BAD_REQUEST
+  PENDING
+  UNAUTHORIZED
+}
+
+type HomeItem {
+  author: String
+  broadcastCount: Int
+  canArchive: Boolean
+  canComment: Boolean
+  canDelete: Boolean
+  canMove: Boolean
+  canSave: Boolean
+  canShare: Boolean
+  date: Date!
+  dir: String
+  id: ID!
+  likeCount: Int
+  previewContent: String
+  saveCount: Int
+  score: Float
+  seen_at: Date
+  slug: String
+  source: HomeItemSource
+  thumbnail: String
+  title: String!
+  url: String!
+  wordCount: Int
+}
+
+type HomeItemSource {
+  icon: String
+  id: ID
+  name: String
+  type: HomeItemSourceType!
+  url: String
+}
+
+enum HomeItemSourceType {
+  LIBRARY
+  NEWSLETTER
+  RECOMMENDATION
+  RSS
+}
+
+union HomeResult = HomeError | HomeSuccess
+
+type HomeSection {
+  items: [HomeItem!]!
+  layout: String
+  thumbnail: String
+  title: String
+}
+
+type HomeSuccess {
+  edges: [HomeEdge!]!
+  pageInfo: PageInfo!
 }
 
 type ImportFromIntegrationError {
@@ -854,14 +1374,37 @@ type ImportFromIntegrationSuccess {
   success: Boolean!
 }
 
+enum ImportItemState {
+  ALL
+  ARCHIVED
+  UNARCHIVED
+  UNREAD
+}
+
 type Integration {
   createdAt: Date!
   enabled: Boolean!
   id: ID!
   name: String!
+  settings: JSON
+  taskName: String
   token: String!
   type: IntegrationType!
-  updatedAt: Date!
+  updatedAt: Date
+}
+
+type IntegrationError {
+  errorCodes: [IntegrationErrorCode!]!
+}
+
+enum IntegrationErrorCode {
+  NOT_FOUND
+}
+
+union IntegrationResult = IntegrationError | IntegrationSuccess
+
+type IntegrationSuccess {
+  integration: Integration!
 }
 
 enum IntegrationType {
@@ -884,6 +1427,8 @@ type IntegrationsSuccess {
   integrations: [Integration!]!
 }
 
+scalar JSON
+
 type JoinGroupError {
   errorCodes: [JoinGroupErrorCode!]!
 }
@@ -905,8 +1450,10 @@ type Label {
   createdAt: Date
   description: String
   id: ID!
+  internal: Boolean
   name: String!
   position: Int
+  source: String
 }
 
 type LabelsError {
@@ -953,7 +1500,7 @@ type Link {
   shareInfo: LinkShareInfo!
   shareStats: ShareStats!
   slug: String!
-  updatedAt: Date!
+  updatedAt: Date
   url: String!
 }
 
@@ -1027,6 +1574,7 @@ enum MergeHighlightErrorCode {
 input MergeHighlightInput {
   annotation: String
   articleId: ID!
+  color: String
   highlightPositionAnchorIndex: Int
   highlightPositionPercent: Float
   html: String
@@ -1035,6 +1583,7 @@ input MergeHighlightInput {
   patch: String!
   prefix: String
   quote: String!
+  representation: RepresentationType
   shortId: ID!
   suffix: String
 }
@@ -1088,29 +1637,50 @@ type MoveLabelSuccess {
   label: Label!
 }
 
+type MoveToFolderError {
+  errorCodes: [MoveToFolderErrorCode!]!
+}
+
+enum MoveToFolderErrorCode {
+  ALREADY_EXISTS
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+union MoveToFolderResult = MoveToFolderError | MoveToFolderSuccess
+
+type MoveToFolderSuccess {
+  success: Boolean!
+}
+
 type Mutation {
+  addDiscoverFeed(input: AddDiscoverFeedInput!): AddDiscoverFeedResult!
   addPopularRead(name: String!): AddPopularReadResult!
-  bulkAction(action: BulkActionType!, query: String): BulkActionResult!
+  bulkAction(action: BulkActionType!, arguments: JSON, async: Boolean, expectedCount: Int, labelIds: [ID!], query: String!): BulkActionResult!
   createArticle(input: CreateArticleInput!): CreateArticleResult!
   createArticleSavingRequest(input: CreateArticleSavingRequestInput!): CreateArticleSavingRequestResult!
+  createFolderPolicy(input: CreateFolderPolicyInput!): CreateFolderPolicyResult!
   createGroup(input: CreateGroupInput!): CreateGroupResult!
   createHighlight(input: CreateHighlightInput!): CreateHighlightResult!
-  createHighlightReply(input: CreateHighlightReplyInput!): CreateHighlightReplyResult!
   createLabel(input: CreateLabelInput!): CreateLabelResult!
-  createNewsletterEmail: CreateNewsletterEmailResult!
-  createReaction(input: CreateReactionInput!): CreateReactionResult!
-  createReminder(input: CreateReminderInput!): CreateReminderResult!
+  createNewsletterEmail(input: CreateNewsletterEmailInput): CreateNewsletterEmailResult!
+  createPost(input: CreatePostInput!): CreatePostResult!
   deleteAccount(userID: ID!): DeleteAccountResult!
+  deleteDiscoverArticle(input: DeleteDiscoverArticleInput!): DeleteDiscoverArticleResult!
+  deleteDiscoverFeed(input: DeleteDiscoverFeedInput!): DeleteDiscoverFeedResult!
   deleteFilter(id: ID!): DeleteFilterResult!
+  deleteFolderPolicy(id: ID!): DeleteFolderPolicyResult!
   deleteHighlight(highlightId: ID!): DeleteHighlightResult!
-  deleteHighlightReply(highlightReplyId: ID!): DeleteHighlightReplyResult!
   deleteIntegration(id: ID!): DeleteIntegrationResult!
   deleteLabel(id: ID!): DeleteLabelResult!
   deleteNewsletterEmail(newsletterEmailId: ID!): DeleteNewsletterEmailResult!
-  deleteReaction(id: ID!): DeleteReactionResult!
-  deleteReminder(id: ID!): DeleteReminderResult!
+  deletePost(id: ID!): DeletePostResult!
   deleteRule(id: ID!): DeleteRuleResult!
   deleteWebhook(id: ID!): DeleteWebhookResult!
+  editDiscoverFeed(input: EditDiscoverFeedInput!): EditDiscoverFeedResult!
+  emptyTrash: EmptyTrashResult!
+  exportToIntegration(integrationId: ID!): ExportToIntegrationResult!
+  fetchContent(id: ID!): FetchContentResult!
   generateApiKey(input: GenerateApiKeyInput!): GenerateApiKeyResult!
   googleLogin(input: GoogleLoginInput!): LoginResult!
   googleSignup(input: GoogleSignupInput!): GoogleSignupResult!
@@ -1122,37 +1692,41 @@ type Mutation {
   mergeHighlight(input: MergeHighlightInput!): MergeHighlightResult!
   moveFilter(input: MoveFilterInput!): MoveFilterResult!
   moveLabel(input: MoveLabelInput!): MoveLabelResult!
+  moveToFolder(folder: String!, id: ID!): MoveToFolderResult!
   optInFeature(input: OptInFeatureInput!): OptInFeatureResult!
   recommend(input: RecommendInput!): RecommendResult!
   recommendHighlights(input: RecommendHighlightsInput!): RecommendHighlightsResult!
+  refreshHome: RefreshHomeResult!
+  replyToEmail(recentEmailId: ID!, reply: AllowedReply!): ReplyToEmailResult!
   reportItem(input: ReportItemInput!): ReportItemResult!
   revokeApiKey(id: ID!): RevokeApiKeyResult!
   saveArticleReadingProgress(input: SaveArticleReadingProgressInput!): SaveArticleReadingProgressResult!
+  saveDiscoverArticle(input: SaveDiscoverArticleInput!): SaveDiscoverArticleResult!
   saveFile(input: SaveFileInput!): SaveResult!
   saveFilter(input: SaveFilterInput!): SaveFilterResult!
   savePage(input: SavePageInput!): SaveResult!
   saveUrl(input: SaveUrlInput!): SaveResult!
   setBookmarkArticle(input: SetBookmarkArticleInput!): SetBookmarkArticleResult!
   setDeviceToken(input: SetDeviceTokenInput!): SetDeviceTokenResult!
-  setFollow(input: SetFollowInput!): SetFollowResult!
+  setFavoriteArticle(id: ID!): SetFavoriteArticleResult!
   setIntegration(input: SetIntegrationInput!): SetIntegrationResult!
   setLabels(input: SetLabelsInput!): SetLabelsResult!
   setLabelsForHighlight(input: SetLabelsForHighlightInput!): SetLabelsResult!
   setLinkArchived(input: ArchiveLinkInput!): ArchiveLinkResult!
   setRule(input: SetRuleInput!): SetRuleResult!
-  setShareArticle(input: SetShareArticleInput!): SetShareArticleResult!
-  setShareHighlight(input: SetShareHighlightInput!): SetShareHighlightResult!
   setUserPersonalization(input: SetUserPersonalizationInput!): SetUserPersonalizationResult!
   setWebhook(input: SetWebhookInput!): SetWebhookResult!
-  subscribe(name: String!): SubscribeResult!
-  unsubscribe(name: String!): UnsubscribeResult!
+  subscribe(input: SubscribeInput!): SubscribeResult!
+  unsubscribe(name: String!, subscriptionId: ID): UnsubscribeResult!
+  updateEmail(input: UpdateEmailInput!): UpdateEmailResult!
+  updateFilter(input: UpdateFilterInput!): UpdateFilterResult!
+  updateFolderPolicy(input: UpdateFolderPolicyInput!): UpdateFolderPolicyResult!
   updateHighlight(input: UpdateHighlightInput!): UpdateHighlightResult!
-  updateHighlightReply(input: UpdateHighlightReplyInput!): UpdateHighlightReplyResult!
   updateLabel(input: UpdateLabelInput!): UpdateLabelResult!
-  updateLinkShareInfo(input: UpdateLinkShareInfoInput!): UpdateLinkShareInfoResult!
+  updateNewsletterEmail(input: UpdateNewsletterEmailInput!): UpdateNewsletterEmailResult!
   updatePage(input: UpdatePageInput!): UpdatePageResult!
-  updateReminder(input: UpdateReminderInput!): UpdateReminderResult!
-  updateSharedComment(input: UpdateSharedCommentInput!): UpdateSharedCommentResult!
+  updatePost(input: UpdatePostInput!): UpdatePostResult!
+  updateSubscription(input: UpdateSubscriptionInput!): UpdateSubscriptionResult!
   updateUser(input: UpdateUserInput!): UpdateUserResult!
   updateUserProfile(input: UpdateUserProfileInput!): UpdateUserProfileResult!
   uploadFileRequest(input: UploadFileRequestInput!): UploadFileRequestResult!
@@ -1163,7 +1737,10 @@ type NewsletterEmail {
   address: String!
   confirmationCode: String
   createdAt: Date!
+  description: String
+  folder: String!
   id: ID!
+  name: String
   subscriptionCount: Int!
 }
 
@@ -1188,6 +1765,7 @@ type OptInFeatureError {
 
 enum OptInFeatureErrorCode {
   BAD_REQUEST
+  INELIGIBLE
   NOT_FOUND
 }
 
@@ -1214,7 +1792,7 @@ type Page {
   readableHtml: String!
   title: String!
   type: PageType!
-  updatedAt: Date!
+  updatedAt: Date
   url: String!
 }
 
@@ -1264,6 +1842,57 @@ input ParseResult {
   title: String!
 }
 
+type Post {
+  author: String!
+  content: String!
+  createdAt: Date!
+  highlights: [Highlight!]
+  id: ID!
+  libraryItems: [Article!]
+  ownedByViewer: Boolean!
+  thought: String
+  thumbnail: String
+  title: String!
+  updatedAt: Date!
+}
+
+type PostEdge {
+  cursor: String!
+  node: Post!
+}
+
+type PostError {
+  errorCodes: [PostErrorCode!]!
+}
+
+enum PostErrorCode {
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+union PostResult = PostError | PostSuccess
+
+type PostSuccess {
+  post: Post!
+}
+
+type PostsError {
+  errorCodes: [PostsErrorCode!]!
+}
+
+enum PostsErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+union PostsResult = PostsError | PostsSuccess
+
+type PostsSuccess {
+  edges: [PostEdge!]!
+  pageInfo: PageInfo!
+}
+
 input PreparedDocumentInput {
   document: String!
   pageInfo: PageInfoInput!
@@ -1281,29 +1910,36 @@ type Query {
   apiKeys: ApiKeysResult!
   article(format: String, slug: String!, username: String!): ArticleResult!
   articleSavingRequest(id: ID, url: String): ArticleSavingRequestResult!
-  articles(after: String, first: Int, includePending: Boolean, query: String, sharedOnly: Boolean, sort: SortParams): ArticlesResult!
   deviceTokens: DeviceTokensResult!
-  feedArticles(after: String, first: Int, sharedByUser: ID, sort: SortParams): FeedArticlesResult!
+  discoverFeeds: DiscoverFeedResult!
+  discoverTopics: GetDiscoverTopicResults!
+  feeds(input: FeedsInput!): FeedsResult!
   filters: FiltersResult!
-  getFollowers(userId: ID): GetFollowersResult!
-  getFollowing(userId: ID): GetFollowingResult!
+  folderPolicies: FolderPoliciesResult!
+  getDiscoverFeedArticles(after: String, discoverTopicId: String!, feedId: ID, first: Int): GetDiscoverFeedArticleResults!
   getUserPersonalization: GetUserPersonalizationResult!
   groups: GroupsResult!
   hello: String
+  hiddenHomeSection: HiddenHomeSectionResult!
+  highlights(after: String, first: Int, query: String): HighlightsResult!
+  home(after: String, first: Int): HomeResult!
+  integration(name: String!): IntegrationResult!
   integrations: IntegrationsResult!
   labels: LabelsResult!
   me: User
   newsletterEmails: NewsletterEmailsResult!
+  post(id: ID!): PostResult!
+  posts(after: String, first: Int, userId: ID!): PostsResult!
   recentEmails: RecentEmailsResult!
   recentSearches: RecentSearchesResult!
-  reminder(linkId: ID!): ReminderResult!
   rules(enabled: Boolean): RulesResult!
+  scanFeeds(input: ScanFeedsInput!): ScanFeedsResult!
   search(after: String, first: Int, format: String, includeContent: Boolean, query: String): SearchResult!
   sendInstallInstructions: SendInstallInstructionsResult!
-  sharedArticle(selectedHighlightId: String, slug: String!, username: String!): SharedArticleResult!
-  subscriptions(sort: SortParams): SubscriptionsResult!
+  subscription(id: ID!): SubscriptionResult!
+  subscriptions(sort: SortParams, type: SubscriptionType): SubscriptionsResult!
   typeaheadSearch(first: Int, query: String!): TypeaheadSearchResult!
-  updatesSince(after: String, first: Int, since: Date!, sort: SortParams): UpdatesSinceResult!
+  updatesSince(after: String, first: Int, folder: String, since: Date!, sort: SortParams): UpdatesSinceResult!
   user(userId: ID, username: String): UserResult!
   users: UsersResult!
   validateUsername(username: String!): Boolean!
@@ -1340,6 +1976,8 @@ type RecentEmail {
   from: String!
   html: String
   id: ID!
+  reply: String
+  replyTo: String
   subject: String!
   text: String!
   to: String!
@@ -1447,7 +2085,7 @@ type RecommendationGroup {
   members: [User!]!
   name: String!
   topics: [String!]
-  updatedAt: Date!
+  updatedAt: Date
 }
 
 type RecommendingUser {
@@ -1455,6 +2093,20 @@ type RecommendingUser {
   profileImageURL: String
   userId: String!
   username: String!
+}
+
+type RefreshHomeError {
+  errorCodes: [RefreshHomeErrorCode!]!
+}
+
+enum RefreshHomeErrorCode {
+  PENDING
+}
+
+union RefreshHomeResult = RefreshHomeError | RefreshHomeSuccess
+
+type RefreshHomeSuccess {
+  success: Boolean!
 }
 
 type Reminder {
@@ -1480,6 +2132,20 @@ type ReminderSuccess {
   reminder: Reminder!
 }
 
+type ReplyToEmailError {
+  errorCodes: [ReplyToEmailErrorCode!]!
+}
+
+enum ReplyToEmailErrorCode {
+  UNAUTHORIZED
+}
+
+union ReplyToEmailResult = ReplyToEmailError | ReplyToEmailSuccess
+
+type ReplyToEmailSuccess {
+  success: Boolean!
+}
+
 input ReportItemInput {
   itemUrl: String!
   pageId: ID!
@@ -1497,6 +2163,11 @@ enum ReportType {
   CONTENT_DISPLAY
   CONTENT_VIOLATION
   SPAM
+}
+
+enum RepresentationType {
+  CONTENT
+  FEED_CONTENT
 }
 
 type RevokeApiKeyError {
@@ -1519,10 +2190,12 @@ type Rule {
   actions: [RuleAction!]!
   createdAt: Date!
   enabled: Boolean!
+  eventTypes: [RuleEventType!]!
+  failedAt: Date
   filter: String!
   id: ID!
   name: String!
-  updatedAt: Date!
+  updatedAt: Date
 }
 
 type RuleAction {
@@ -1538,8 +2211,19 @@ input RuleActionInput {
 enum RuleActionType {
   ADD_LABEL
   ARCHIVE
+  DELETE
+  EXPORT
   MARK_AS_READ
   SEND_NOTIFICATION
+  WEBHOOK
+}
+
+enum RuleEventType {
+  HIGHLIGHT_CREATED
+  HIGHLIGHT_UPDATED
+  LABEL_CREATED
+  PAGE_CREATED
+  PAGE_UPDATED
 }
 
 type RulesError {
@@ -1568,8 +2252,9 @@ enum SaveArticleReadingProgressErrorCode {
 }
 
 input SaveArticleReadingProgressInput {
+  force: Boolean
   id: ID!
-  readingProgressAnchorIndex: Int!
+  readingProgressAnchorIndex: Int
   readingProgressPercent: Float!
   readingProgressTopPercent: Float
 }
@@ -1578,6 +2263,29 @@ union SaveArticleReadingProgressResult = SaveArticleReadingProgressError | SaveA
 
 type SaveArticleReadingProgressSuccess {
   updatedArticle: Article!
+}
+
+type SaveDiscoverArticleError {
+  errorCodes: [SaveDiscoverArticleErrorCode!]!
+}
+
+enum SaveDiscoverArticleErrorCode {
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+input SaveDiscoverArticleInput {
+  discoverArticleId: ID!
+  locale: String
+  timezone: String
+}
+
+union SaveDiscoverArticleResult = SaveDiscoverArticleError | SaveDiscoverArticleSuccess
+
+type SaveDiscoverArticleSuccess {
+  saveId: String!
+  url: String!
 }
 
 type SaveError {
@@ -1593,9 +2301,13 @@ enum SaveErrorCode {
 
 input SaveFileInput {
   clientRequestId: ID!
+  folder: String
   labels: [CreateLabelInput!]
+  publishedAt: Date
+  savedAt: Date
   source: String!
   state: ArticleSavingRequestStatus
+  subscription: String
   uploadFileId: ID!
   url: String!
 }
@@ -1611,10 +2323,12 @@ enum SaveFilterErrorCode {
 }
 
 input SaveFilterInput {
+  category: String
   description: String
   filter: String!
-  id: ID
+  folder: String
   name: String!
+  position: Int
 }
 
 union SaveFilterResult = SaveFilterError | SaveFilterSuccess
@@ -1625,9 +2339,13 @@ type SaveFilterSuccess {
 
 input SavePageInput {
   clientRequestId: ID!
+  folder: String
   labels: [CreateLabelInput!]
   originalContent: String!
   parseResult: ParseResult
+  publishedAt: Date
+  rssFeedUrl: String
+  savedAt: Date
   source: String!
   state: ArticleSavingRequestStatus
   title: String
@@ -1643,10 +2361,34 @@ type SaveSuccess {
 
 input SaveUrlInput {
   clientRequestId: ID!
+  folder: String
   labels: [CreateLabelInput!]
+  locale: String
+  publishedAt: Date
+  savedAt: Date
   source: String!
   state: ArticleSavingRequestStatus
+  timezone: String
   url: String!
+}
+
+type ScanFeedsError {
+  errorCodes: [ScanFeedsErrorCode!]!
+}
+
+enum ScanFeedsErrorCode {
+  BAD_REQUEST
+}
+
+input ScanFeedsInput {
+  opml: String
+  url: String
+}
+
+union ScanFeedsResult = ScanFeedsError | ScanFeedsSuccess
+
+type ScanFeedsSuccess {
+  feeds: [Feed!]!
 }
 
 type SearchError {
@@ -1659,23 +2401,32 @@ enum SearchErrorCode {
 }
 
 type SearchItem {
+  aiSummary: String
   annotation: String
   archivedAt: Date
   author: String
+  color: String
   content: String
   contentReader: ContentReader!
   createdAt: Date!
   description: String
+  directionality: DirectionalityType
+  feedContent: String
+  folder: String!
+  format: String
   highlights: [Highlight!]
+  highlightsCount: Int
   id: ID!
   image: String
   isArchived: Boolean!
   labels: [Label!]
   language: String
+  links: JSON
   originalArticleUrl: String
   ownedByViewer: Boolean
   pageId: ID
   pageType: PageType!
+  previewContentType: String
   publishedAt: Date
   quote: String
   readAt: Date
@@ -1684,6 +2435,8 @@ type SearchItem {
   readingProgressTopPercent: Float
   recommendations: [Recommendation!]
   savedAt: Date!
+  score: Float
+  seenAt: Date
   shortId: String
   siteIcon: String
   siteName: String
@@ -1769,6 +2522,23 @@ type SetDeviceTokenSuccess {
   deviceToken: DeviceToken!
 }
 
+type SetFavoriteArticleError {
+  errorCodes: [SetFavoriteArticleErrorCode!]!
+}
+
+enum SetFavoriteArticleErrorCode {
+  ALREADY_EXISTS
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+union SetFavoriteArticleResult = SetFavoriteArticleError | SetFavoriteArticleSuccess
+
+type SetFavoriteArticleSuccess {
+  success: Boolean!
+}
+
 type SetFollowError {
   errorCodes: [SetFollowErrorCode!]!
 }
@@ -1804,7 +2574,11 @@ enum SetIntegrationErrorCode {
 input SetIntegrationInput {
   enabled: Boolean!
   id: ID
+  importItemState: ImportItemState
   name: String!
+  settings: JSON
+  syncedAt: Date
+  taskName: String
   token: String!
   type: IntegrationType
 }
@@ -1827,12 +2601,15 @@ enum SetLabelsErrorCode {
 
 input SetLabelsForHighlightInput {
   highlightId: ID!
-  labelIds: [ID!]!
+  labelIds: [ID!]
+  labels: [CreateLabelInput!]
 }
 
 input SetLabelsInput {
-  labelIds: [ID!]!
+  labelIds: [ID!]
+  labels: [CreateLabelInput!]
   pageId: ID!
+  source: String
 }
 
 union SetLabelsResult = SetLabelsError | SetLabelsSuccess
@@ -1855,6 +2632,7 @@ input SetRuleInput {
   actions: [RuleActionInput!]!
   description: String
   enabled: Boolean!
+  eventTypes: [RuleEventType!]!
   filter: String!
   id: ID
   name: String!
@@ -1921,6 +2699,8 @@ enum SetUserPersonalizationErrorCode {
 }
 
 input SetUserPersonalizationInput {
+  digestConfig: DigestConfigInput
+  fields: JSON
   fontFamily: String
   fontSize: Int
   libraryLayoutType: String
@@ -2020,8 +2800,19 @@ type SubscribeError {
 enum SubscribeErrorCode {
   ALREADY_SUBSCRIBED
   BAD_REQUEST
+  EXCEEDED_MAX_SUBSCRIPTIONS
   NOT_FOUND
   UNAUTHORIZED
+}
+
+input SubscribeInput {
+  autoAddToLibrary: Boolean
+  fetchContent: Boolean
+  fetchContentType: FetchContentType
+  folder: String
+  isPrivate: Boolean
+  subscriptionType: SubscriptionType
+  url: String!
 }
 
 union SubscribeResult = SubscribeError | SubscribeSuccess
@@ -2031,23 +2822,53 @@ type SubscribeSuccess {
 }
 
 type Subscription {
+  autoAddToLibrary: Boolean
+  count: Int!
   createdAt: Date!
   description: String
+  failedAt: Date
+  fetchContent: Boolean!
+  fetchContentType: FetchContentType!
+  folder: String!
   icon: String
   id: ID!
+  isPrivate: Boolean
+  lastFetchedAt: Date
+  mostRecentItemDate: Date
   name: String!
-  newsletterEmail: String!
+  newsletterEmail: String
+  refreshedAt: Date
   status: SubscriptionStatus!
+  type: SubscriptionType!
   unsubscribeHttpUrl: String
   unsubscribeMailTo: String
-  updatedAt: Date!
+  updatedAt: Date
   url: String
+}
+
+type SubscriptionError {
+  errorCodes: [ErrorCode!]!
+}
+
+union SubscriptionResult = SubscriptionError | SubscriptionSuccess
+
+type SubscriptionRootType {
+  hello: String
 }
 
 enum SubscriptionStatus {
   ACTIVE
   DELETED
   UNSUBSCRIBED
+}
+
+type SubscriptionSuccess {
+  subscription: Subscription!
+}
+
+enum SubscriptionType {
+  NEWSLETTER
+  RSS
 }
 
 type SubscriptionsError {
@@ -2070,6 +2891,25 @@ type SyncUpdatedItemEdge {
   itemID: ID!
   node: SearchItem
   updateReason: UpdateReason!
+}
+
+type Task {
+  cancellable: Boolean
+  createdAt: Date!
+  failedReason: String
+  id: ID!
+  name: String!
+  progress: Float
+  runningTime: Int
+  state: TaskState!
+}
+
+enum TaskState {
+  CANCELLED
+  FAILED
+  PENDING
+  RUNNING
+  SUCCEEDED
 }
 
 type TypeaheadSearchError {
@@ -2112,6 +2952,75 @@ type UnsubscribeSuccess {
   subscription: Subscription!
 }
 
+type UpdateEmailError {
+  errorCodes: [UpdateEmailErrorCode!]!
+}
+
+enum UpdateEmailErrorCode {
+  BAD_REQUEST
+  EMAIL_ALREADY_EXISTS
+  UNAUTHORIZED
+}
+
+input UpdateEmailInput {
+  email: String!
+}
+
+union UpdateEmailResult = UpdateEmailError | UpdateEmailSuccess
+
+type UpdateEmailSuccess {
+  email: String!
+  verificationEmailSent: Boolean
+}
+
+type UpdateFilterError {
+  errorCodes: [UpdateFilterErrorCode!]!
+}
+
+enum UpdateFilterErrorCode {
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+input UpdateFilterInput {
+  category: String
+  description: String
+  filter: String
+  folder: String
+  id: String!
+  name: String
+  position: Int
+  visible: Boolean
+}
+
+union UpdateFilterResult = UpdateFilterError | UpdateFilterSuccess
+
+type UpdateFilterSuccess {
+  filter: Filter!
+}
+
+type UpdateFolderPolicyError {
+  errorCodes: [UpdateFolderPolicyErrorCode!]!
+}
+
+enum UpdateFolderPolicyErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+input UpdateFolderPolicyInput {
+  action: FolderPolicyAction
+  afterDays: Int
+  id: ID!
+}
+
+union UpdateFolderPolicyResult = UpdateFolderPolicyError | UpdateFolderPolicySuccess
+
+type UpdateFolderPolicySuccess {
+  policy: FolderPolicy!
+}
+
 type UpdateHighlightError {
   errorCodes: [UpdateHighlightErrorCode!]!
 }
@@ -2125,6 +3034,7 @@ enum UpdateHighlightErrorCode {
 
 input UpdateHighlightInput {
   annotation: String
+  color: String
   highlightId: ID!
   html: String
   quote: String
@@ -2203,6 +3113,28 @@ type UpdateLinkShareInfoSuccess {
   message: String!
 }
 
+type UpdateNewsletterEmailError {
+  errorCodes: [UpdateNewsletterEmailErrorCode!]!
+}
+
+enum UpdateNewsletterEmailErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+input UpdateNewsletterEmailInput {
+  description: String
+  folder: String
+  id: ID!
+  name: String
+}
+
+union UpdateNewsletterEmailResult = UpdateNewsletterEmailError | UpdateNewsletterEmailSuccess
+
+type UpdateNewsletterEmailSuccess {
+  newsletterEmail: NewsletterEmail!
+}
+
 type UpdatePageError {
   errorCodes: [UpdatePageErrorCode!]!
 }
@@ -2219,8 +3151,10 @@ input UpdatePageInput {
   byline: String
   description: String
   pageId: ID!
+  previewImage: String
   publishedAt: Date
   savedAt: Date
+  state: ArticleSavingRequestStatus
   title: String
 }
 
@@ -2228,6 +3162,31 @@ union UpdatePageResult = UpdatePageError | UpdatePageSuccess
 
 type UpdatePageSuccess {
   updatedPage: Article!
+}
+
+type UpdatePostError {
+  errorCodes: [UpdatePostErrorCode!]!
+}
+
+enum UpdatePostErrorCode {
+  BAD_REQUEST
+  UNAUTHORIZED
+}
+
+input UpdatePostInput {
+  content: String
+  highlightIds: [ID!]
+  id: ID!
+  libraryItemIds: [ID!]
+  thought: String
+  thumbnail: String
+  title: String
+}
+
+union UpdatePostResult = UpdatePostError | UpdatePostSuccess
+
+type UpdatePostSuccess {
+  post: Post!
 }
 
 enum UpdateReason {
@@ -2278,6 +3237,39 @@ union UpdateSharedCommentResult = UpdateSharedCommentError | UpdateSharedComment
 type UpdateSharedCommentSuccess {
   articleID: ID!
   sharedComment: String!
+}
+
+type UpdateSubscriptionError {
+  errorCodes: [UpdateSubscriptionErrorCode!]!
+}
+
+enum UpdateSubscriptionErrorCode {
+  BAD_REQUEST
+  NOT_FOUND
+  UNAUTHORIZED
+}
+
+input UpdateSubscriptionInput {
+  autoAddToLibrary: Boolean
+  description: String
+  failedAt: Date
+  fetchContent: Boolean
+  fetchContentType: FetchContentType
+  folder: String
+  id: ID!
+  isPrivate: Boolean
+  lastFetchedChecksum: String
+  mostRecentItemDate: Date
+  name: String
+  refreshedAt: Date
+  scheduledAt: Date
+  status: SubscriptionStatus
+}
+
+union UpdateSubscriptionResult = UpdateSubscriptionError | UpdateSubscriptionSuccess
+
+type UpdateSubscriptionSuccess {
+  subscription: Subscription!
 }
 
 type UpdateUserError {
@@ -2396,9 +3388,14 @@ enum UploadImportFileType {
 }
 
 type User {
+  createdAt: Date!
+  email: String
+  featureList: [Feature!]
+  features: [String]
   followersCount: Int
   friendsCount: Int
   id: ID!
+  intercomHash: String
   isFriend: Boolean @deprecated(reason: "isFriend has been replaced with viewerIsFollowing")
   isFullUser: Boolean
   name: String!
@@ -2408,6 +3405,7 @@ type User {
   sharedArticlesCount: Int
   sharedHighlightsCount: Int
   sharedNotesCount: Int
+  source: String
   viewerIsFollowing: Boolean
 }
 
@@ -2422,6 +3420,8 @@ enum UserErrorCode {
 }
 
 type UserPersonalization {
+  digestConfig: DigestConfig
+  fields: JSON
   fontFamily: String
   fontSize: Int
   id: ID
@@ -2462,7 +3462,7 @@ type Webhook {
   eventTypes: [WebhookEvent!]!
   id: ID!
   method: String!
-  updatedAt: Date!
+  updatedAt: Date
   url: String!
 }
 

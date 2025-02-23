@@ -1,22 +1,22 @@
-import { ArticleAttributes } from '../../../lib/networking/queries/useGetArticleQuery'
+import { ArticleAttributes } from '../../../lib/networking/library_items/useLibraryItems'
 import { Box, VStack } from '../../elements/LayoutPrimitives'
 import { v4 as uuidv4 } from 'uuid'
 import { nanoid } from 'nanoid'
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { currentTheme, getTheme, isDarkTheme } from '../../../lib/themeUpdater'
+import {
+  getCurrentLocalTheme,
+  getTheme,
+  isDarkTheme,
+} from '../../../lib/themeUpdater'
 import PSPDFKit from 'pspdfkit'
 import { Instance, HighlightAnnotation, List, Annotation, Rect } from 'pspdfkit'
 import type { Highlight } from '../../../lib/networking/fragments/highlightFragment'
-import { createHighlightMutation } from '../../../lib/networking/mutations/createHighlightMutation'
-import { deleteHighlightMutation } from '../../../lib/networking/mutations/deleteHighlightMutation'
-import { articleReadingProgressMutation } from '../../../lib/networking/mutations/articleReadingProgressMutation'
-import { mergeHighlightMutation } from '../../../lib/networking/mutations/mergeHighlightMutation'
 import { useCanShareNative } from '../../../lib/hooks/useCanShareNative'
 import { pspdfKitKey } from '../../../lib/appConfig'
 import { NotebookModal } from './NotebookModal'
 import { HighlightNoteModal } from './HighlightNoteModal'
 import { showErrorToast } from '../../../lib/toastHelpers'
-import { HEADER_HEIGHT } from '../homeFeed/HeaderSpacer'
+import { DEFAULT_HEADER_HEIGHT } from '../homeFeed/HeaderSpacer'
 import { UserBasicData } from '../../../lib/networking/queries/useGetViewerQuery'
 import Epub, { EpubCFI } from 'epubjs'
 import { Rendition, Contents } from 'epubjs/types'
@@ -102,7 +102,7 @@ export default function EpubContainer(props: EpubContainerProps): JSX.Element {
       }
     })
 
-    const themeId = currentTheme()
+    const themeId = getCurrentLocalTheme()
     if (themeId) {
       const readerTheme = getTheme(themeId)
       renditionRef.current.themes.override(
@@ -294,7 +294,7 @@ export default function EpubContainer(props: EpubContainerProps): JSX.Element {
           paddingBottom: '0px',
         },
         width: '100%',
-        height: `calc(100vh - ${HEADER_HEIGHT})`,
+        height: `calc(100vh - ${DEFAULT_HEADER_HEIGHT})`,
       }}
     >
       <Box
@@ -307,56 +307,6 @@ export default function EpubContainer(props: EpubContainerProps): JSX.Element {
         {/* EPUB CONTAINER
         <div ></div> */}
       </Box>
-      {noteTarget && (
-        <HighlightNoteModal
-          highlight={noteTarget}
-          author={props.article.author ?? ''}
-          title={props.article.title}
-          onUpdate={(highlight: Highlight) => {
-            const savedHighlight = highlightsRef.current.find(
-              (other: Highlight) => {
-                return other.id == highlight.id
-              }
-            )
-
-            if (savedHighlight) {
-              savedHighlight.annotation = highlight.annotation
-            }
-          }}
-          onOpenChange={() => {
-            setNoteTarget(undefined)
-          }}
-        />
-      )}
-      {props.showHighlightsModal && (
-        <NotebookModal
-          key={notebookKey}
-          viewer={props.viewer}
-          item={props.article}
-          highlights={highlightsRef.current}
-          onClose={(updatedHighlights, deletedAnnotations) => {
-            console.log(
-              'closed PDF notebook: ',
-              updatedHighlights,
-              deletedAnnotations
-            )
-            deletedAnnotations.forEach((highlight) => {
-              const event = new CustomEvent('deleteHighlightbyId', {
-                detail: highlight.id,
-              })
-              document.dispatchEvent(event)
-            })
-            props.setShowHighlightsModal(false)
-          }}
-          viewHighlightInReader={(highlightId) => {
-            const event = new CustomEvent('scrollToHighlightId', {
-              detail: highlightId,
-            })
-            document.dispatchEvent(event)
-            props.setShowHighlightsModal(false)
-          }}
-        />
-      )}
     </Box>
   )
 }

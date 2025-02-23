@@ -1,5 +1,4 @@
 import { Root, Overlay, Content } from '@radix-ui/react-dialog'
-import { X } from 'phosphor-react'
 import { styled, keyframes, theme } from '../tokens/stitches.config'
 import { Button } from './Button'
 import { CloseButton } from './CloseButton'
@@ -36,6 +35,7 @@ const Modal = styled(Content, {
 export const ModalContent = styled(Modal, {
   top: '50%',
   left: '50%',
+  bg: '$readerBg',
   transform: 'translate(-50%, -50%)',
   width: '90vw',
   maxWidth: '450px',

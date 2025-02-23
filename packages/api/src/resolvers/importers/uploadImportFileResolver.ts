@@ -1,26 +1,22 @@
-import { authorized } from '../../utils/helpers'
+import { DateTime } from 'luxon'
+import { v4 as uuidv4 } from 'uuid'
+import { env } from '../../env'
 import {
-  UploadImportFileErrorCode,
   MutationUploadImportFileArgs,
   UploadImportFileError,
+  UploadImportFileErrorCode,
   UploadImportFileSuccess,
 } from '../../generated/graphql'
-import { getRepository } from '../../entity/utils'
-import { User } from '../../entity/user'
+import { userRepository } from '../../repository/user'
 import { analytics } from '../../utils/analytics'
-import { env } from '../../env'
-import { DateTime } from 'luxon'
+import { authorized } from '../../utils/gql-utils'
+import { logger } from '../../utils/logger'
 import {
   countOfFilesWithPrefix,
   generateUploadSignedUrl,
 } from '../../utils/uploads'
-import { v4 as uuidv4 } from 'uuid'
-import { buildLogger } from '../../utils/logger'
 
-const MAX_DAILY_UPLOADS = 4
 const VALID_CONTENT_TYPES = ['text/csv', 'application/zip']
-
-const logger = buildLogger('app.dispatch')
 
 const extensionForContentType = (contentType: string) => {
   switch (contentType) {
@@ -36,24 +32,22 @@ export const uploadImportFileResolver = authorized<
   UploadImportFileSuccess,
   UploadImportFileError,
   MutationUploadImportFileArgs
->(async (_, { type, contentType }, { claims: { uid }, log }) => {
-  log.info('uploadImportFileResolver')
-
+>(async (_, { type, contentType }, { uid }) => {
   if (!VALID_CONTENT_TYPES.includes(contentType)) {
     return {
       errorCodes: [UploadImportFileErrorCode.BadRequest],
     }
   }
 
-  const user = await getRepository(User).findOneBy({ id: uid })
+  const user = await userRepository.findById(uid)
   if (!user) {
     return {
       errorCodes: [UploadImportFileErrorCode.Unauthorized],
     }
   }
 
-  analytics.track({
-    userId: uid,
+  analytics.capture({
+    distinctId: uid,
     event: 'upload_import_file',
     properties: {
       type,
@@ -66,7 +60,8 @@ export const uploadImportFileResolver = authorized<
   const dirPath = `imports/${uid}/${dateStr}/`
   const fileCount = await countOfFilesWithPrefix(dirPath)
 
-  if (fileCount > MAX_DAILY_UPLOADS) {
+  const MAX_DAILY_UPLOADS = env.fileUpload.dailyUploadLimit
+  if (fileCount >= MAX_DAILY_UPLOADS) {
     return {
       errorCodes: [UploadImportFileErrorCode.UploadDailyLimitExceeded],
     }

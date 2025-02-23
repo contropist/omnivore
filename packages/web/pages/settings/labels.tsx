@@ -8,11 +8,6 @@ import {
   HStack,
   VStack,
 } from '../../components/elements/LayoutPrimitives'
-import { Toaster } from 'react-hot-toast'
-import { useGetLabelsQuery } from '../../lib/networking/queries/useGetLabelsQuery'
-import { createLabelMutation } from '../../lib/networking/mutations/createLabelMutation'
-import { updateLabelMutation } from '../../lib/networking/mutations/updateLabelMutation'
-import { deleteLabelMutation } from '../../lib/networking/mutations/deleteLabelMutation'
 import { applyStoredTheme, isDarkTheme } from '../../lib/themeUpdater'
 import { showErrorToast, showSuccessToast } from '../../lib/toastHelpers'
 import { Label, LabelColor } from '../../lib/networking/fragments/labelFragment'
@@ -22,14 +17,9 @@ import {
   DotsThree,
   PencilSimple,
   Trash,
-  Plus,
-} from 'phosphor-react'
-import {
-  GenericTableCardProps,
-  LabelColorHex,
-} from '../../utils/settings-page/labels/types'
+} from '@phosphor-icons/react'
+import { GenericTableCardProps } from '../../utils/settings-page/labels/types'
 import { labelColorObjects } from '../../utils/settings-page/labels/labelColorObjects'
-import { TooltipWrapped } from '../../components/elements/Tooltip'
 import { LabelColorDropdown } from '../../components/elements/LabelColorDropdown'
 import {
   Dropdown,
@@ -38,6 +28,14 @@ import {
 import { LabelChip } from '../../components/elements/LabelChip'
 import { ConfirmationModal } from '../../components/patterns/ConfirmationModal'
 import { InfoLink } from '../../components/elements/InfoLink'
+import { usePersistedState } from '../../lib/hooks/usePersistedState'
+import { FeatureHelpBox } from '../../components/elements/FeatureHelpBox'
+import {
+  useCreateLabel,
+  useDeleteLabel,
+  useGetLabels,
+  useUpdateLabel,
+} from '../../lib/networking/labels/useLabels'
 
 const HeaderWrapper = styled(Box, {
   width: '100%',
@@ -82,6 +80,7 @@ const TableCardBox = styled(Box, {
 })
 
 const inputStyles = {
+  height: '35px',
   backgroundColor: 'transparent',
   color: '$grayTextContrast',
   padding: '6px 6px',
@@ -145,24 +144,31 @@ const Input = styled('input', { ...inputStyles })
 const TextArea = styled('textarea', { ...inputStyles })
 
 export default function LabelsPage(): JSX.Element {
-  const { labels, revalidate } = useGetLabelsQuery()
-  const [labelColorHex, setLabelColorHex] = useState<LabelColorHex>({
-    rowId: '',
-    value: '#000000',
-  })
+  const { data: labels, isLoading } = useGetLabels()
+  const createLabel = useCreateLabel()
+  const deleteLabel = useDeleteLabel()
+  const updateLabel = useUpdateLabel()
+
+  const [labelColorHex, setLabelColorHex] = useState('#000000')
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null)
   const [nameInputText, setNameInputText] = useState<string>('')
   const [descriptionInputText, setDescriptionInputText] = useState<string>('')
   const [isCreateMode, setIsCreateMode] = useState<boolean>(false)
   const [windowWidth, setWindowWidth] = useState<number>(0)
-  const [confirmRemoveLabelId, setConfirmRemoveLabelId] = useState<
-    string | null
-  >(null)
+  const [confirmRemoveLabelId, setConfirmRemoveLabelId] =
+    useState<string | null>(null)
+  const [showLabelPageHelp, setShowLabelPageHelp] = usePersistedState<boolean>({
+    key: `--settings-labels-show-help`,
+    initialValue: true,
+  })
   const breakpoint = 768
 
-  applyStoredTheme(false)
+  applyStoredTheme()
 
   const sortedLabels = useMemo(() => {
+    if (!labels) {
+      return []
+    }
     return labels.sort((left: Label, right: Label) =>
       left.name.localeCompare(right.name)
     )
@@ -184,32 +190,38 @@ export default function LabelsPage(): JSX.Element {
     setEditingLabelId('')
     setNameInputText('')
     setDescriptionInputText('')
-    setLabelColorHex({ rowId: '', value: '#000000' })
+    setLabelColorHex('#000000')
   }
 
-  async function createLabel(): Promise<void> {
-    const res = await createLabelMutation(
-      nameInputText.trim(),
-      labelColorHex.value,
-      descriptionInputText
-    )
+  async function doCreateLabel(): Promise<void> {
+    const res = await createLabel.mutateAsync({
+      name: nameInputText.trim(),
+      color: labelColorHex,
+      description: descriptionInputText,
+    })
     if (res) {
       showSuccessToast('Label created', { position: 'bottom-right' })
       resetLabelState()
-      revalidate()
     } else {
       showErrorToast('Failed to create label')
     }
   }
 
-  async function updateLabel(id: string): Promise<void> {
-    await updateLabelMutation({
-      labelId: id,
-      name: nameInputText,
-      color: labelColorHex.value,
-      description: descriptionInputText,
-    })
-    revalidate()
+  async function doUpdateLabel(id: string): Promise<void> {
+    try {
+      await updateLabel.mutateAsync({
+        labelId: id,
+        name: nameInputText,
+        color: labelColorHex,
+        description: descriptionInputText,
+      })
+    } catch (err) {
+      console.log('error updating label: ', err)
+      showErrorToast('Failed to update label')
+      return
+    }
+    showSuccessToast('Label updated', { position: 'bottom-right' })
+    resetLabelState()
   }
 
   const onEditPress = (label: Label | null) => {
@@ -217,23 +229,22 @@ export default function LabelsPage(): JSX.Element {
       setEditingLabelId(label.id)
       setNameInputText(label.name)
       setDescriptionInputText(label.description || '')
-      setLabelColorHex({ rowId: '', value: label.color })
+      setLabelColorHex(label.color)
     } else {
       resetLabelState()
     }
   }
 
-  async function onDeleteLabel(id: string): Promise<void> {
-    const result = await deleteLabelMutation(id)
+  async function onDeleteLabel(labelId: string): Promise<void> {
+    const result = await deleteLabel.mutateAsync({ labelId })
     if (result) {
       showSuccessToast('Label deleted', { position: 'bottom-right' })
     } else {
       showErrorToast('Failed to delete label', { position: 'bottom-right' })
     }
-    revalidate()
   }
 
-  async function deleteLabel(id: string): Promise<void> {
+  async function doDeleteLabel(id: string): Promise<void> {
     setConfirmRemoveLabelId(id)
   }
 
@@ -244,20 +255,11 @@ export default function LabelsPage(): JSX.Element {
     ) as LabelColor[]
     const randomColorHex =
       colorHexes[Math.floor(Math.random() * colorHexes.length)]
-    setLabelColorHex((prevState) => ({
-      ...prevState,
-      rowId: rowId || '',
-      value: randomColorHex,
-    }))
+    setLabelColorHex(randomColorHex)
   }
 
   return (
     <SettingsLayout>
-      <Toaster
-        containerStyle={{
-          top: '5rem',
-        }}
-      />
       <HStack css={{ width: '100%', height: '100%' }}>
         <VStack
           css={{
@@ -279,6 +281,23 @@ export default function LabelsPage(): JSX.Element {
               onOpenChange={() => setConfirmRemoveLabelId(null)}
             />
           ) : null}
+          {showLabelPageHelp && (
+            <FeatureHelpBox
+              helpTitle="Use labels to organize your library and optimize your workflow."
+              helpMessage="Use this page to view and edit all your labels. Labels can be attached to individual library items, or your highlights, and are used to keep your library organized."
+              docsMessage={'Read the Docs'}
+              docsDestination="https://docs.omnivore.app/using/organizing.html#labels"
+              onDismiss={() => {
+                setShowLabelPageHelp(false)
+              }}
+              helpCTAText="Create a label"
+              onClickCTA={() => {
+                resetLabelState()
+                handleGenerateRandomColor()
+                setIsCreateMode(true)
+              }}
+            />
+          )}
           <HeaderWrapper>
             <Box
               style={{
@@ -289,7 +308,7 @@ export default function LabelsPage(): JSX.Element {
               <Box>
                 <StyledText style="fixedHeadline">Labels </StyledText>
               </Box>
-              <InfoLink href="/help/labels" />
+              <InfoLink href="https://docs.omnivore.app/using/organizing.html#labels" />
               <Box
                 css={{
                   display: 'flex',
@@ -314,24 +333,11 @@ export default function LabelsPage(): JSX.Element {
                     >
                       <SpanBox
                         css={{
-                          display: 'none',
-                          '@md': {
-                            display: 'flex',
-                          },
-                        }}
-                      >
-                        <SpanBox>Add Label</SpanBox>
-                      </SpanBox>
-                      <SpanBox
-                        css={{
-                          p: '0',
                           display: 'flex',
-                          '@md': {
-                            display: 'none',
-                          },
+                          '@md': {},
                         }}
                       >
-                        <Plus size={24} />
+                        <SpanBox>Create a label</SpanBox>
                       </SpanBox>
                     </Button>
                   </>
@@ -350,14 +356,14 @@ export default function LabelsPage(): JSX.Element {
                   handleGenerateRandomColor={handleGenerateRandomColor}
                   setEditingLabelId={setEditingLabelId}
                   setLabelColorHex={setLabelColorHex}
-                  deleteLabel={deleteLabel}
+                  deleteLabel={doDeleteLabel}
                   nameInputText={nameInputText}
                   descriptionInputText={descriptionInputText}
                   setNameInputText={setNameInputText}
                   setDescriptionInputText={setDescriptionInputText}
                   setIsCreateMode={setIsCreateMode}
-                  createLabel={createLabel}
-                  updateLabel={updateLabel}
+                  createLabel={doCreateLabel}
+                  updateLabel={doUpdateLabel}
                   onEditPress={onEditPress}
                   resetState={resetLabelState}
                 />
@@ -370,15 +376,15 @@ export default function LabelsPage(): JSX.Element {
                   handleGenerateRandomColor={handleGenerateRandomColor}
                   setEditingLabelId={setEditingLabelId}
                   setLabelColorHex={setLabelColorHex}
-                  deleteLabel={deleteLabel}
+                  deleteLabel={doDeleteLabel}
                   nameInputText={nameInputText}
                   descriptionInputText={descriptionInputText}
                   setNameInputText={setNameInputText}
                   setDescriptionInputText={setDescriptionInputText}
                   setIsCreateMode={setIsCreateMode}
-                  createLabel={createLabel}
+                  createLabel={doCreateLabel}
                   resetState={resetLabelState}
-                  updateLabel={updateLabel}
+                  updateLabel={doUpdateLabel}
                 />
               )
             ) : null}
@@ -397,22 +403,29 @@ export default function LabelsPage(): JSX.Element {
                   handleGenerateRandomColor: handleGenerateRandomColor,
                   setEditingLabelId: setEditingLabelId,
                   setLabelColorHex: setLabelColorHex,
-                  deleteLabel: deleteLabel,
+                  deleteLabel: doDeleteLabel,
                   nameInputText: nameInputText,
                   descriptionInputText: descriptionInputText,
                   setNameInputText: setNameInputText,
                   setDescriptionInputText: setDescriptionInputText,
                   setIsCreateMode: setIsCreateMode,
-                  createLabel: createLabel,
+                  createLabel: doCreateLabel,
                   resetState: resetLabelState,
-                  updateLabel: updateLabel,
+                  updateLabel: doUpdateLabel,
                 }
 
                 if (editingLabelId == label.id) {
                   if (windowWidth >= breakpoint) {
-                    return <DesktopEditCard {...cardProps} />
+                    return (
+                      <DesktopEditCard
+                        key={`edit-${label.id}`}
+                        {...cardProps}
+                      />
+                    )
                   } else {
-                    return <MobileEditCard {...cardProps} />
+                    return (
+                      <MobileEditCard key={`edit-${label.id}`} {...cardProps} />
+                    )
                   }
                 }
 
@@ -459,8 +472,7 @@ function GenericTableCard(
     resetState,
   } = props
   const showInput = editingLabelId === label?.id || (isCreateMode && !label)
-  const labelColor =
-    editingLabelId === label?.id ? labelColorHex.value : label?.color
+  const labelColor = editingLabelId === label?.id ? labelColorHex : label?.color
   const iconColor = isDarkTheme() ? '#D8D7D5' : '#5F5E58'
 
   const handleEdit = () => {
@@ -649,38 +661,29 @@ function GenericTableCard(
             <LabelColorDropdown
               isCreateMode={isCreateMode && !label}
               canEdit={editingLabelId === label?.id}
-              labelColorHexRowId={labelColorHex.rowId}
-              labelColorHexValue={labelColorHex.value}
+              labelColor={labelColorHex}
+              setLabelColor={setLabelColorHex}
               labelId={label?.id || ''}
-              labelColor={label?.color || '#000000'}
-              setLabelColorHex={setLabelColorHex}
             />
           )}
           {showInput && (
-            <TooltipWrapped
-              tooltipSide={'top'}
-              tooltipContent="Random Color"
-              arrowStyles={{ fill: '#F9D354' }}
-              style={{ backgroundColor: '#F9D354', color: 'black' }}
-            >
-              <Box css={{ py: 4 }}>
-                <IconButton
-                  style="ctaWhite"
-                  css={{
-                    mr: '$1',
-                    width: 40,
-                    height: 40,
-                    background: '$labelButtonsBg',
-                  }}
-                  onClick={() => handleGenerateRandomColor(label?.id)}
-                  disabled={
-                    !(isCreateMode && !label) && !(editingLabelId === label?.id)
-                  }
-                >
-                  <ArrowClockwise size={16} color={iconColor} />
-                </IconButton>
-              </Box>
-            </TooltipWrapped>
+            <Box title="Random color" css={{ py: 4 }}>
+              <IconButton
+                style="ctaWhite"
+                css={{
+                  mr: '$1',
+                  width: 40,
+                  height: 40,
+                  background: '$labelButtonsBg',
+                }}
+                onClick={() => handleGenerateRandomColor(label?.id)}
+                disabled={
+                  !(isCreateMode && !label) && !(editingLabelId === label?.id)
+                }
+              >
+                <ArrowClockwise size={16} color={iconColor} />
+              </IconButton>
+            </Box>
           )}
           {!showInput && (
             <Box css={{ marginLeft: 'auto', '@md': { display: 'none' } }}>
@@ -809,7 +812,7 @@ function MobileEditCard(props: any) {
       <VStack distribution="center" css={{ width: '100%', margin: '8px' }}>
         {nameInputText && (
           <SpanBox css={{ ml: '-2px', mt: '0px' }}>
-            <LabelChip color={labelColorHex.value} text={nameInputText} />
+            <LabelChip color={labelColorHex} text={nameInputText} />
           </SpanBox>
         )}
         <Input
@@ -821,11 +824,9 @@ function MobileEditCard(props: any) {
         <LabelColorDropdown
           isCreateMode={isCreateMode && !label}
           canEdit={editingLabelId === label?.id}
-          labelColorHexRowId={labelColorHex.rowId}
-          labelColorHexValue={labelColorHex.value}
           labelId={label?.id || ''}
           labelColor={label?.color || '#000000'}
-          setLabelColorHex={setLabelColorHex}
+          setLabelColor={setLabelColorHex}
         />
         <TextArea
           placeholder="Description (optional)"
@@ -900,7 +901,7 @@ function DesktopEditCard(props: any) {
       >
         {nameInputText && (
           <SpanBox css={{ px: '11px', mt: '3px' }}>
-            <LabelChip color={labelColorHex.value} text={nameInputText} />
+            <LabelChip color={labelColorHex} text={nameInputText} />
           </SpanBox>
         )}
         <HStack
@@ -917,11 +918,9 @@ function DesktopEditCard(props: any) {
           <LabelColorDropdown
             isCreateMode={isCreateMode && !label}
             canEdit={editingLabelId === label?.id}
-            labelColorHexRowId={labelColorHex.rowId}
-            labelColorHexValue={labelColorHex.value}
             labelId={label?.id || ''}
-            labelColor={label?.color || '#000000'}
-            setLabelColorHex={setLabelColorHex}
+            labelColor={labelColorHex}
+            setLabelColor={setLabelColorHex}
           />
           <Input
             type="text"

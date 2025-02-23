@@ -7,7 +7,7 @@ struct WebReaderContent {
   let textFontSize: Int
   let lineHeight: Int
   let maxWidthPercentage: Int
-  let item: LinkedItem
+  let item: LibraryItem
   let isDark: Bool
   let themeKey: String
   let fontFamily: WebFont
@@ -17,7 +17,7 @@ struct WebReaderContent {
   let justifyText: Bool
 
   init(
-    item: LinkedItem,
+    item: Models.LibraryItem,
     articleContent: ArticleContent,
     isDark: Bool,
     fontSize: Int,
@@ -56,6 +56,15 @@ struct WebReaderContent {
           <style>
             @import url("highlight\(isDark ? "-dark" : "").css");
           </style>
+          <style>
+            body {
+              -webkit-text-size-adjust: 100%;
+            }
+            .is-sticky {
+              right: 20px !important;
+              bottom: 60px !important;
+            }
+          </style>
       </head>
       <body>
         <div id="root" />
@@ -81,7 +90,7 @@ struct WebReaderContent {
             title: `\(articleContent.title.replacingOccurrences(of: "`", with: "\\`"))`,
             content: document.getElementById('_omnivore-htmlContent').innerHTML,
             originalArticleUrl: "\(item.unwrappedPageURLString)",
-            contentReader: "WEB",
+            contentReader: "\(item.contentReader ?? "WEB")",
             readingProgressPercent: \(item.readingProgress),
             readingProgressAnchorIndex: \(item.readingProgressAnchor),
             labels: \(item.labelsJSONString),

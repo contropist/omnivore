@@ -1,6 +1,5 @@
 import { DetailedHTMLProps, MetaHTMLAttributes } from 'react'
 import Head from 'next/head'
-import { useDarkModeListener } from '../../lib/hooks/useDarkModeListener'
 import { webBaseURL } from '../../lib/appConfig'
 
 type MetaTag = DetailedHTMLProps<
@@ -27,14 +26,9 @@ function openGraphType(ogImage: string | null): string {
 }
 
 export function PageMetaData(props: PageMetaDataProps): JSX.Element {
-  const isDarkMode = useDarkModeListener()
-
   return (
     <Head>
-      <link
-        rel="shortcut icon"
-        href={`/static/icons/favicon-${isDarkMode ? 'dark' : 'light'}.ico`}
-      />
+      <link rel="icon" href="/static/icons/favicon.ico" sizes="32x32" />
 
       <meta property="fb:app_id" content="3584400838451823" />
       <meta name="twitter:card" content="summary_large_image" />
@@ -88,12 +82,12 @@ export function PageMetaData(props: PageMetaDataProps): JSX.Element {
       {props.path && (
         <meta
           property="og:url"
-          content={`https://omnivore.app${props.path}`}
+          content={`${webBaseURL}/${props.path}`}
           key="og-url"
         />
       )}
       {props.path && (
-        <link rel="canonical" href={`https://omnivore.app${props.path}`} />
+        <link rel="canonical" href={`${webBaseURL}/${props.path}`} />
       )}
 
       {/* Custom additional meta tags */}

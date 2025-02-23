@@ -8,6 +8,7 @@ import {
   appleAuthRedirectURI,
 } from '../../lib/appConfig'
 import { AppleIdButton } from './auth/AppleIdButton'
+import { useEffect, useRef } from 'react'
 
 export type LoginFormProps = {
   errorMessage?: string
@@ -19,7 +20,7 @@ export function LoginForm(props: LoginFormProps): JSX.Element {
     fontWeight: '700',
     fontSize: '45px',
     lineHeight: '53px',
-    color: '$omnivoreGray',
+    color: '#FFFFFF',
     m: '0px',
   })
 
@@ -45,26 +46,24 @@ export function LoginForm(props: LoginFormProps): JSX.Element {
           fontSize: '18px',
           lineHeight: '120%',
           m: '0px',
-          color: '$omnivoreGray',
+          color: '#898989',
         }}
       >
         Save articles and read them later in our distraction-free reader.
       </StyledText>
-      <Link passHref href="/about">
-        <a style={{ textDecoration: 'none' }}>
-          <StyledText
-            css={{
-              fontStyle: 'normal',
-              fontWeight: '400',
-              fontSize: '18px',
-              lineHeight: '120%',
-              m: '0px',
-              color: '$omnivoreGray',
-            }}
-          >
-            Learn More -&gt;
-          </StyledText>
-        </a>
+      <Link passHref href="/about" style={{ textDecoration: 'none' }}>
+        <StyledText
+          css={{
+            fontStyle: 'normal',
+            fontWeight: '400',
+            fontSize: '18px',
+            lineHeight: '120%',
+            m: '0px',
+            color: '#898989',
+          }}
+        >
+          Learn More -&gt;
+        </StyledText>
       </Link>
 
       <SpanBox css={{ height: '24px' }} />
@@ -103,10 +102,10 @@ export function LoginForm(props: LoginFormProps): JSX.Element {
             />
           </Box>
         )}
-        <Link href="/auth/email-login" passHref>
+        <Link href="/auth/email-login" passHref legacyBehavior>
           <StyledTextSpan
             style="actionLink"
-            css={{ color: '$omnivoreGray', pt: '12px' }}
+            css={{ color: '#EDEDED', pt: '12px' }}
           >
             Continue with Email
           </StyledTextSpan>
@@ -118,6 +117,20 @@ export function LoginForm(props: LoginFormProps): JSX.Element {
 }
 
 function GoogleAuthButton() {
+  useEffect(() => {
+    const script = document.createElement('script')
+
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.defer = true
+
+    document.body.appendChild(script)
+
+    return () => {
+      document.body.removeChild(script)
+    }
+  }, [])
+
   return (
     <Box css={{ overflow: 'hidden' }}>
       <div
@@ -154,14 +167,20 @@ export function TermAndConditionsFooter(): JSX.Element {
       }}
     >
       By signing up, you agree to Omnivore’s{' '}
-      <Link href="/terms" passHref>
-        <StyledTextSpan style="captionLink" css={{ color: '$omnivoreGray' }}>
+      <Link href="/terms" passHref legacyBehavior>
+        <StyledTextSpan
+          style="captionLink"
+          css={{ color: '$omnivoreLightGray' }}
+        >
           Terms of Service
         </StyledTextSpan>
       </Link>{' '}
       and{' '}
-      <Link href="/privacy" passHref>
-        <StyledTextSpan style="captionLink" css={{ color: '$omnivoreGray' }}>
+      <Link href="/privacy" passHref legacyBehavior>
+        <StyledTextSpan
+          style="captionLink"
+          css={{ color: '$omnivoreLightGray' }}
+        >
           Privacy Policy
         </StyledTextSpan>
       </Link>

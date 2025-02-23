@@ -1,45 +1,82 @@
-import normalizeUrl from 'normalize-url'
 import * as privateIpLib from 'private-ip'
-import { v4 as uuidv4 } from 'uuid'
-import { createPubSubClient, PubsubClient } from '../datalayer/pubsub'
-import {
-  countByCreatedAt,
-  createPage,
-  getPageByParam,
-  updatePage,
-} from '../elastic/pages'
-import { ArticleSavingRequestStatus, Label, PageType } from '../elastic/types'
+import { LibraryItem, LibraryItemState } from '../entity/library_item'
 import { User } from '../entity/user'
-import { getRepository } from '../entity/utils'
 import {
-  ArticleSavingRequest,
+  ArticleSavingRequestStatus,
   CreateArticleSavingRequestErrorCode,
+  CreateLabelInput,
+  PageType,
 } from '../generated/graphql'
-import { enqueueParseRequest } from '../utils/createTask'
-import { generateSlug, pageToArticleSavingRequest } from '../utils/helpers'
+import { createPubSubClient, PubsubClient } from '../pubsub'
+import { redisDataSource } from '../redis_data_source'
+import { enqueueFetchContentJob } from '../utils/createTask'
+import { cleanUrl, generateSlug } from '../utils/helpers'
+import { logger } from '../utils/logger'
+import { createOrUpdateLibraryItem } from './library_item'
 
 interface PageSaveRequest {
-  userId: string
+  user: User
   url: string
   pubsub?: PubsubClient
   articleSavingRequestId?: string
-  archivedAt?: Date | null
-  labels?: Label[]
+  state?: ArticleSavingRequestStatus
+  labels?: CreateLabelInput[]
   priority?: 'low' | 'high'
-  user?: User | null
+  locale?: string
+  timezone?: string
+  savedAt?: Date
+  publishedAt?: Date
+  folder?: string
+  subscription?: string
 }
 
 const SAVING_CONTENT = 'Your link is being saved...'
 
 const isPrivateIP = privateIpLib.default
 
-// 5 articles added in the last minute: use low queue
+const recentSavedItemKey = (userId: string) => `recent-saved-item:${userId}`
+
+const addRecentSavedItem = async (userId: string) => {
+  const redisClient = redisDataSource.redisClient
+
+  if (redisClient) {
+    const key = recentSavedItemKey(userId)
+    try {
+      // add now to the sorted set for rate limiting
+      await redisClient.zadd(key, Date.now(), Date.now())
+    } catch (error) {
+      logger.error('error adding recently saved item in redis', {
+        key,
+        error,
+      })
+    }
+  }
+}
+
+// 5 items saved in the last minute: use low queue
 // default: use normal queue
 const getPriorityByRateLimit = async (
   userId: string
 ): Promise<'low' | 'high'> => {
-  const count = await countByCreatedAt(userId, Date.now() - 60 * 1000)
-  return count >= 5 ? 'low' : 'high'
+  const redisClient = redisDataSource.redisClient
+  if (redisClient) {
+    const oneMinuteAgo = Date.now() - 60 * 1000
+    const key = recentSavedItemKey(userId)
+
+    try {
+      // Remove items older than one minute
+      await redisClient.zremrangebyscore(key, '-inf', oneMinuteAgo)
+
+      // Count items in the last minute
+      const count = await redisClient.zcard(key)
+
+      return count >= 5 ? 'low' : 'high'
+    } catch (error) {
+      logger.error('Failed to get priority by rate limit', { userId, error })
+    }
+  }
+
+  return 'high'
 }
 
 export const validateUrl = (url: string): URL => {
@@ -70,106 +107,78 @@ export const validateUrl = (url: string): URL => {
 }
 
 export const createPageSaveRequest = async ({
-  userId,
+  user,
   url,
   pubsub = createPubSubClient(),
-  articleSavingRequestId = uuidv4(),
-  archivedAt,
+  articleSavingRequestId,
+  state,
   priority,
   labels,
-  user,
-}: PageSaveRequest): Promise<ArticleSavingRequest> => {
+  locale,
+  timezone,
+  savedAt,
+  publishedAt,
+  folder,
+  subscription,
+}: PageSaveRequest): Promise<LibraryItem> => {
   try {
     validateUrl(url)
   } catch (error) {
-    console.log('invalid url', url, error)
+    logger.error('invalid url', { url, error })
+
     return Promise.reject({
       errorCode: CreateArticleSavingRequestErrorCode.BadData,
     })
   }
-  // if user is not specified, get it from the database
-  if (!user) {
-    user = await getRepository(User).findOneBy({
-      id: userId,
-    })
-    if (!user) {
-      console.log('User not found', userId)
-      return Promise.reject({
-        errorCode: CreateArticleSavingRequestErrorCode.BadData,
-      })
-    }
-  }
+
+  const userId = user.id
+  url = cleanUrl(url)
+
+  // create processing item
+  const libraryItem = await createOrUpdateLibraryItem(
+    {
+      id: articleSavingRequestId || undefined,
+      user: { id: userId },
+      readableContent: SAVING_CONTENT,
+      itemType: PageType.Unknown,
+      slug: generateSlug(url),
+      title: url,
+      originalUrl: url,
+      state: LibraryItemState.Processing,
+      publishedAt,
+      folder,
+      subscription,
+      savedAt,
+    },
+    userId,
+    pubsub
+  )
+
+  // add to recent saved item
+  await addRecentSavedItem(userId)
 
   // get priority by checking rate limit if not specified
   priority = priority || (await getPriorityByRateLimit(userId))
 
-  // look for existing page
-  const normalizedUrl = normalizeUrl(url, {
-    stripHash: true,
-    stripWWW: false,
-  })
-
-  const ctx = {
-    pubsub,
-    uid: userId,
-  }
-  let page = await getPageByParam({
-    userId,
-    url: normalizedUrl,
-  })
-  if (!page) {
-    console.log('Page not exists', normalizedUrl)
-    page = {
-      id: articleSavingRequestId,
-      userId,
-      content: SAVING_CONTENT,
-      hash: '',
-      pageType: PageType.Unknown,
-      readingProgressAnchorIndex: 0,
-      readingProgressPercent: 0,
-      slug: generateSlug(url),
-      title: url,
-      url: normalizedUrl,
-      state: ArticleSavingRequestStatus.Processing,
-      createdAt: new Date(),
-      savedAt: new Date(),
-      archivedAt,
-      labels,
-    }
-
-    // create processing page
-    const pageId = await createPage(page, ctx)
-    if (!pageId) {
-      console.log('Failed to create page', page)
-      return Promise.reject({
-        errorCode: CreateArticleSavingRequestErrorCode.BadData,
-      })
-    }
-  }
-  // reset state to processing
-  if (page.state !== ArticleSavingRequestStatus.Processing) {
-    await updatePage(
-      page.id,
-      {
-        state: ArticleSavingRequestStatus.Processing,
-      },
-      ctx
-    )
-  }
-  const labelsInput = labels?.map((label) => ({
-    name: label.name,
-    color: label.color,
-    description: label.description,
-  }))
-  // enqueue task to parse page
-  await enqueueParseRequest({
+  // enqueue task to parse item
+  await enqueueFetchContentJob({
     url,
-    userId,
-    saveRequestId: page.id,
+    users: [
+      {
+        folder,
+        id: userId,
+        libraryItemId: libraryItem.id,
+      },
+    ],
     priority,
-    state: archivedAt ? ArticleSavingRequestStatus.Archived : undefined,
-    labels: labelsInput,
+    state,
+    labels,
+    locale,
+    timezone,
+    savedAt: savedAt?.toISOString(),
+    publishedAt: publishedAt?.toISOString(),
+    rssFeedUrl: subscription,
   })
 
-  return pageToArticleSavingRequest(user, page)
+  return libraryItem
 }

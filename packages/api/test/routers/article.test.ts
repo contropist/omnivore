@@ -1,12 +1,13 @@
-import { createTestUser, deleteTestUser } from '../db'
-import { request } from '../util'
 import { expect } from 'chai'
-import nock from 'nock'
 import 'mocha'
-import { env } from '../../src/env'
-import { User } from '../../src/entity/user'
+import nock from 'nock'
 import sinon from 'sinon'
+import { User } from '../../src/entity/user'
+import { env } from '../../src/env'
+import { deleteUser } from '../../src/services/user'
 import * as createTask from '../../src/utils/createTask'
+import { createTestUser } from '../db'
+import { request } from '../util'
 
 describe('/article/save API', () => {
   let user: User
@@ -15,7 +16,9 @@ describe('/article/save API', () => {
   // We need to mock the pupeeteer-parse
   // service here because in dev mode the task gets
   // called immediately.
-  nock(env.queue.contentFetchUrl).post('/').reply(200)
+  if (env.queue.contentFetchUrl) {
+    nock(env.queue.contentFetchUrl).post('/').reply(200)
+  }
 
   before(async () => {
     // create test user and login
@@ -24,19 +27,23 @@ describe('/article/save API', () => {
       .post('/local/debug/fake-user-login')
       .send({ fakeEmail: user.email })
 
-    authToken = res.body.authToken
+    authToken = res.body.authToken as string
   })
 
   after(async () => {
     // clean up
-    await deleteTestUser(user.id)
+    await deleteUser(user.id)
   })
 
   describe('POST /article/save', () => {
     const url = 'https://blog.omnivore.app'
 
     before(() => {
-      sinon.replace(createTask, 'enqueueParseRequest', sinon.fake.resolves(''))
+      sinon.replace(
+        createTask,
+        'enqueueFetchContentJob',
+        sinon.fake.resolves('')
+      )
     })
 
     after(() => {

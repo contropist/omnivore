@@ -7,6 +7,7 @@ import {
 } from 'firebase-admin/messaging'
 import { env } from '../env'
 import { analytics } from './analytics'
+import { logger } from './logger'
 
 export type PushNotificationType = 'newsletter' | 'reminder' | 'rule'
 
@@ -21,8 +22,8 @@ export const sendPushNotification = async (
   type: PushNotificationType
 ): Promise<string | undefined> => {
   try {
-    analytics.track({
-      userId,
+    analytics.capture({
+      distinctId: userId,
       event: 'notification_sent',
       properties: {
         type,
@@ -32,11 +33,11 @@ export const sendPushNotification = async (
     })
 
     const res = await getMessaging().send(message)
-    console.log(res)
+    logger.info(res)
 
     return res
   } catch (err) {
-    console.log('firebase cloud message error: ', err)
+    logger.error('firebase cloud message error: ', err)
 
     return undefined
   }
@@ -48,8 +49,8 @@ export const sendMulticastPushNotifications = async (
   type: PushNotificationType
 ): Promise<BatchResponse | undefined> => {
   try {
-    analytics.track({
-      userId,
+    analytics.capture({
+      distinctId: userId,
       event: 'notification_sent',
       properties: {
         type,
@@ -58,13 +59,13 @@ export const sendMulticastPushNotifications = async (
       },
     })
 
-    console.log('sending multicast message: ', JSON.stringify(message))
-    const res = await getMessaging().sendMulticast(message)
-    console.log('send notification result: ', JSON.stringify(res.responses))
+    logger.info('sending multicast message: ', message)
+    const res = await getMessaging().sendEachForMulticast(message)
+    logger.info('send notification result: ', res.responses)
 
     return res
   } catch (err) {
-    console.log('firebase cloud message error: ', err)
+    logger.error('firebase cloud message error: ', err)
 
     return undefined
   }
@@ -74,12 +75,12 @@ export const sendBatchPushNotifications = async (
   messages: Message[]
 ): Promise<BatchResponse | undefined> => {
   try {
-    const res = await getMessaging().sendAll(messages)
-    console.log('success count: ', res.successCount)
+    const res = await getMessaging().sendEach(messages)
+    logger.info(`success count: ${res.successCount}`)
 
     return res
   } catch (err) {
-    console.log('firebase cloud message error: ', err)
+    logger.error('firebase cloud message error: ', err)
 
     return undefined
   }

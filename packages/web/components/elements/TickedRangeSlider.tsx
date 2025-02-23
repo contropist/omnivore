@@ -1,7 +1,6 @@
 import { Box, HStack, SpanBox } from './LayoutPrimitives'
 import { styled } from '../tokens/stitches.config'
 import { Root as Slider, Thumb, Track } from '@radix-ui/react-slider'
-import { DropdownSeparator } from './DropdownElements'
 
 type TickedRangeSliderProps = {
   ticks?: number
@@ -23,14 +22,14 @@ const StyledSlider = styled(Slider, {
     height: '8px',
     width: '225px',
     borderRadius: '10px',
-    backgroundColor: '#F2F2F2',
+    backgroundColor: '$thTextSubtle2',
   },
   '.SliderThumb': {
     display: 'block',
-    width: '20px',
-    height: '20px',
+    width: '15px',
+    height: '15px',
     borderRadius: '50%',
-    border: '4px solid white',
+    border: '2px solid $thTextSubtle2',
     backgroundColor: '#FFD234',
     boxShadow: '0px 0px 20px rgba(19, 56, 77, 0.2)',
   },

@@ -5,6 +5,7 @@ import OSLog
 import Services
 import Utils
 
+@MainActor
 public final class Services {
   static let fetchTaskID = "app.omnivore.fetchLinkedItems"
   static let secondsToWaitBeforeNextBackgroundRefresh: TimeInterval = isDebug ? 0 : 3600 // 1 hour
@@ -84,13 +85,7 @@ public final class Services {
       Task {
         do {
           let fetchedItemCount = try await services.dataService.fetchLinkedItemsBackgroundTask()
-          EventTracker.track(
-            .backgroundFetch(
-              jobStatus: .success,
-              itemCount: fetchedItemCount,
-              secondsElapsed: Int(startTime.timeIntervalSinceNow)
-            )
-          )
+          BadgeCountHandler.updateBadgeCount(dataService: services.dataService)
           task.setTaskCompleted(success: true)
         } catch {
           EventTracker.track(

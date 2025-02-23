@@ -7,6 +7,7 @@ export enum ThemeId {
   Sepia = 'Sepia',
   Apollo = 'Apollo',
   Black = 'Black',
+  System = 'System',
 }
 
 export const { styled, css, theme, getCssText, globalCss, keyframes, config } =
@@ -103,8 +104,8 @@ export const { styled, css, theme, getCssText, globalCss, keyframes, config } =
       borderWidths: {},
       borderStyles: {},
       shadows: {
-        panelShadow: '0px 4px 18px rgba(120, 123, 134, 0.12)',
-        cardBoxShadow: '0px 16px 25px 16px rgba(32, 31, 29, 0.1)',
+        // cardBoxShadow: '0px 1px 2px 0px rgba(0, 0, 0, 0.05);',
+        cardBoxShadow: '0px 4px 4px rgba(0, 0, 0, 0.20);',
       },
       zIndices: {},
       transitions: {},
@@ -130,26 +131,32 @@ export const { styled, css, theme, getCssText, globalCss, keyframes, config } =
         grayBorderHover: 'hsl(0 0% 78.0%)',
         grayText: '#6A6968',
 
-        // Semantic Colors
+        ctaBlue: '#007AFF',
+        modalBackground: '#FFFFFF',
+
         highlightBackground: '255, 210, 52',
         recommendedHighlightBackground: '#E5FFE5',
         highlight: '#FFD234',
         highlightText: '#3D3D3D',
         error: '#FA5E4A',
 
+        discover: '#7274d5',
+
         // Brand Colors
         omnivoreRed: '#FA5E4A;',
         omnivoreGray: '#3D3D3D',
-        omnivoreYellow: 'rgb(255, 234, 159)',
+        omnivoreYellow: '#FFEAA0',
         omnivoreLightGray: 'rgb(125, 125, 125)',
         omnivoreCtaYellow: 'rgb(255, 210, 52)',
+        searchActiveOutline: 'rgb(255, 210, 52)',
 
         // Reader Colors
-        readerBg: 'white',
+        readerBg: '#FAFAFA',
         readerFont: '#3D3D3D',
         readerFontHighContrast: 'black',
         readerTableHeader: '#FFFFFF',
         readerMargin: 'white',
+        readerTextSubtle: '#898989',
 
         // Avatar Fallback color
         avatarBg: '#FFEA9F',
@@ -163,15 +170,47 @@ export const { styled, css, theme, getCssText, globalCss, keyframes, config } =
         //utility
         overlay: 'rgba(63, 62, 60, 0.2)',
 
-        // New theme, special naming to keep things straigh
+        // New theme, special naming to keep things straight
         // once all switch over, we will rename
         thBackground: '#FFFFFF',
         thBackground2: '#F3F3F3',
-        thBackground3: '#FFFFFF',
+        thBackground3: '#FCFCFC',
         thBackground4: '#EBEBEB',
         thBackground5: '#F5F5F5',
-        thBackgroundActive: '#F9F9F9',
+        thBackgroundActive: '#FFEA9F',
         thBackgroundContrast: '#FFFFFF',
+        thLeftMenuBackground: '#F2F2F2',
+        thNavMenuFooter: '#DFDFDF',
+        thLibraryBackground: '#FFFFFF',
+        thLibrarySearchbox: '#FCFCFC',
+        thLibraryMenuPrimary: '#3D3D3D',
+        thLibraryMenuSecondary: '#3D3D3D',
+        thLibraryMenuUnselected: '#3D3D3D',
+        thLibrarySelectionColor: '#FFEA9F',
+        thLibraryNavigationMenuFooter: '#EFEADE',
+        thLibraryMenuFooterHover: '#FFFFFF',
+        thLibraryMultiselectHover: '#D9D9D9',
+        thLibraryMultiselectCheckbox: '#3D3D3D',
+        thLibraryMultiselectCheckboxHover: '#3D3D3D',
+
+        thTLDRText: '#434343',
+
+        thFormInput: '#EBEBEB',
+        thHomeIcon: '#2A2A2A',
+
+        thLabelChipForeground: '#2A2A2A',
+        thLabelChipBackground: '#EDEDED',
+        thLabelChipSelectedBorder: 'black',
+        thLabelChipUnselectedBorder: '#F5F5F5',
+        thLabelOutlineChipBorder: '#D9D9D9',
+
+        thHeaderIconRing: '#D9D9D9',
+        thHeaderIconInner: '#898989',
+
+        thNotebookSubtle: '#6A6968',
+        thNotebookBorder: '#D9D9D9',
+        thNotebookBackground: '#FCFCFC',
+        thNotebookTextBackground: '#EBEBEB',
 
         thTextContrast: '#1E1E1E',
         thTextContrast2: '#3D3D3D',
@@ -179,13 +218,42 @@ export const { styled, css, theme, getCssText, globalCss, keyframes, config } =
         thTextSubtle: '#1E1E1E',
         thTextSubtle2: '#6A6968',
         thTextSubtle3: '#ADADAD',
+        thTextSubtle4: '#EDEDED',
 
         thBorderColor: '#E1E1E1',
         thBorderSubtle: '#EEEEEE',
+        tabTextUnselected: '#898989',
 
         thProgressFg: '#FFD234',
 
         thHighContrast: '#3D3D3D',
+        thHighlightBar: '#D9D9D9',
+
+        homeCardHover: '#FFFFFF',
+        homeTextTitle: '#2A2A2A',
+        homeTextSource: '#3D3D3D',
+        homeTextBody: '#3D3D3D',
+        homeTextSubtle: '#898989',
+        homeActionIcons: '#898989',
+        homeActionHoverBg: '#DFDFDF',
+        homeDivider: '#D9D9D9',
+
+        backgroundMedium: '#FFFFFF',
+
+        thLibraryAISummaryBorder: '#6A6968',
+        thLibraryAISummaryBackground: '#343434',
+
+        thFallbackImageForeground: '#2A2A2A',
+        thFallbackImageBackground: '#EDEDED',
+
+        highlight_background_green: '85, 198, 137',
+        highlight_background_blue: '106, 177, 255',
+        highlight_background_orange: '254, 181, 109',
+        highlight_background_yellow: '255, 210, 52',
+        highlight_background_red: '251, 154, 154',
+
+        highlight_background_alpha: '0.2',
+        highlight_underline_alpha: '1.0',
       },
     },
     media: {
@@ -206,6 +274,9 @@ const darkThemeSpec = {
   colorScheme: {
     colorScheme: 'dark',
   },
+  shadows: {
+    cardBoxShadow: '0px 4px 8px rgba(0, 0, 0, 0.35);',
+  },
   colors: {
     grayBase: '#252525',
     grayBg: '#3B3938',
@@ -222,6 +293,8 @@ const darkThemeSpec = {
     grayBorderHover: 'hsl(0 0% 31.2%)',
     grayText: '#CDCDCD',
 
+    modalBackground: '#2A2A2A',
+
     // Semantic Colors
     highlightBackground: '134, 109, 21',
     recommendedHighlightBackground: '#1F4315',
@@ -230,11 +303,12 @@ const darkThemeSpec = {
     error: '#FA5E4A',
 
     // Reader Colors
-    readerBg: '#303030',
+    readerBg: '#2A2A2A',
     readerFont: '#b9b9b9',
     readerFontHighContrast: 'white',
     readerTableHeader: '#FFFFFF',
     readerMargin: '#2A2A2A',
+    readerTextSubtle: '#EDEDED',
 
     avatarBg: '#7B5C3E',
     avatarFont: '#D9D9D9',
@@ -248,7 +322,7 @@ const darkThemeSpec = {
 
     labelButtonsBg: '#5F5E58',
 
-    // New theme, special naming to keep things straigh
+    // New theme, special naming to keep things straight
     // once all switch over, we will rename
     // DARK
     colorScheme: 'dark',
@@ -257,8 +331,42 @@ const darkThemeSpec = {
     thBackground3: '#242424',
     thBackground4: '#3D3D3D',
     thBackground5: '#3D3D3D',
-    thBackgroundActive: '#2E2E2E',
+    thBackgroundActive: '#3D3D3D',
     thBackgroundContrast: '#000000',
+    thLeftMenuBackground: '#343434',
+    thNavMenuFooter: '#515151',
+    thLibraryBackground: '#2A2A2A',
+    thLibrarySearchbox: '#3D3D3D',
+    thLibraryMenuPrimary: '#EBEBEB',
+    thLibraryMenuSecondary: '#EBEBEB',
+    thLibraryMenuUnselected: 'white',
+    thLibrarySelectionColor: '#515151',
+    thLibraryNavigationMenuFooter: '#3D3D3D',
+    thLibraryMenuFooterHover: '#6A6968',
+    thLibraryMultiselectHover: '#6A6968',
+    thLibraryMultiselectCheckbox: 'white',
+    thLibraryMultiselectCheckboxHover: 'white',
+
+    thTLDRText: '#D9D9D9',
+
+    searchActiveOutline: '#866D15',
+    thFormInput: '#3D3D3D',
+    thHomeIcon: '#FFFFFF',
+
+    thLabelChipForeground: '#EBEBEB',
+    thLabelChipBackground: '#343434',
+    thLabelChipSelectedBorder: '#FFEA9F',
+    thLabelChipUnselectedBorder: '#2A2A2A',
+    thLabelOutlineChipBorder: '#6A696850',
+
+    thHeaderIconRing: '#3D3D3D',
+    thHeaderIconInner: '#D9D9D9',
+
+    thNotebookSubtle: '#898989',
+    thNotebookBorder: '#3D3D3D',
+    thNotebookBackground: '#2F2F2F',
+    thNotebookTextBackground: '#3D3D3D',
+    thNotebookHighContrast: '#2A2A2A',
 
     thTextContrast: '#FFFFFF',
     thTextContrast2: '#EBEBEB',
@@ -269,14 +377,33 @@ const darkThemeSpec = {
 
     thBorderColor: '#4F4F4F',
     thBorderSubtle: '#6A6968',
+    tabTextUnselected: '#6A6968',
 
     thProgressFg: '#FFD234',
 
     thHighContrast: '#D9D9D9',
-  },
-  shadows: {
-    cardBoxShadow:
-      '0px 0px 9px -2px rgba(5, 5, 5, 0.16), 0px 7px 12px rgba(0, 0, 0, 0.13)',
+
+    thHighlightBar: '#6A6968',
+
+    homeCardHover: '#323232',
+    homeTextTitle: '#FFFFFF',
+    homeTextSource: '#D9D9D9',
+    homeTextBody: '#D9D9D9',
+    homeTextSubtle: '#898989',
+    homeActionIcons: '#898989',
+    homeActionHoverBg: '#515151',
+    homeDivider: '#3D3D3D',
+
+    backgroundMedium: '#323232',
+
+    thLibraryAISummaryBorder: '#6A6968',
+    thLibraryAISummaryBackground: '#343434',
+
+    thFallbackImageForeground: '#FEFFFF',
+    thFallbackImageBackground: '#3C3C3C',
+
+    highlight_underline_alpha: '0.5',
+    highlight_background_alpha: '0.35',
   },
 }
 
@@ -287,26 +414,61 @@ const blackThemeSpec = {
   },
 }
 
+const apolloThemeSpec = {
+  colors: {
+    readerBg: '#474747',
+    readerFont: '#F3F3F3',
+    readerMargin: '#474747',
+    readerFontHighContrast: 'white',
+    readerTableHeader: '#FFFFFF',
+
+    thLeftMenuBackground: '#3D3D3D',
+    thNavMenuFooter: '#515151',
+
+    thLibrarySelectionColor: '#515151',
+    thBackground4: '#51515166', // used on hover of nav menu items
+    thBorderColor: '#6A6968',
+
+    homeCardHover: '#525252',
+    homeDivider: '#6A6968',
+    homeActionHoverBg: '#474747',
+
+    thBackground: '#474747',
+    thBackground2: '#515151',
+    backgroundMedium: '#525252',
+
+    thLibraryMultiselectHover: '#EEE8D5',
+    thLabelChipBackground: '#6A6968',
+  },
+}
+
 const sepiaThemeSpec = {
   colorScheme: {
     colorScheme: 'light',
   },
   colors: {
-    readerBg: '#FBF0D9',
+    readerBg: '#FDF6E3',
     readerFont: '#5F4B32',
     readerMargin: '#F3F3F3',
     readerFontHighContrast: '#0A0806',
     readerTableHeader: '#FFFFFF',
-  },
-}
 
-const apolloThemeSpec = {
-  colors: {
-    readerBg: '#6A6968',
-    readerFont: '#F3F3F3',
-    readerMargin: '#474747',
-    readerFontHighContrast: 'white',
-    readerTableHeader: '#FFFFFF',
+    thLeftMenuBackground: '#F8F1E0',
+    thNavMenuFooter: '#EEE8D5',
+
+    thLibrarySelectionColor: '#EEE8D5',
+    thLabelChipBackground: '#EEE8D5',
+    thBackground4: '#DDD6C166', // used on hover of menu items
+    thBorderColor: '#DDD6C1',
+
+    thBackground: '#FDF6E3',
+
+    homeCardHover: '#EEE8D5',
+    backgroundMedium: '#EEE8D5',
+    homeDivider: '#DDD6C1',
+    homeActionHoverBg: '#DDD6C1',
+
+    thLibraryMultiselectHover: '#EEE8D5',
   },
 }
 
@@ -334,7 +496,7 @@ export const blackTheme = createTheme(ThemeId.Black, {
 export const globalStyles = globalCss({
   body: {
     colorScheme: 'var(--colorScheme-colorScheme)',
-    backgroundColor: '$thBackground',
+    backgroundColor: '$readerBg',
   },
   // browser prefers this loaded here vs in the article styling css
   '.article-inner-css': {

@@ -3,61 +3,48 @@ import {
   ModalOverlay,
   ModalContent,
 } from '../../elements/ModalPrimitives'
-import { HStack, SpanBox } from '../../elements/LayoutPrimitives'
+import { HStack } from '../../elements/LayoutPrimitives'
 import { Button } from '../../elements/Button'
 import { StyledText } from '../../elements/StyledText'
 import { theme } from '../../tokens/stitches.config'
 import type { Highlight } from '../../../lib/networking/fragments/highlightFragment'
 import { useCallback, useState } from 'react'
-import { ArrowsIn, ArrowsOut, X } from 'phosphor-react'
+import { X } from '@phosphor-icons/react'
 import { Dropdown, DropdownOption } from '../../elements/DropdownElements'
 import { showErrorToast, showSuccessToast } from '../../../lib/toastHelpers'
-import { diff_match_patch } from 'diff-match-patch'
 import { MenuTrigger } from '../../elements/MenuTrigger'
 import { highlightsAsMarkdown } from '../homeFeed/HighlightItem'
 import 'react-markdown-editor-lite/lib/index.css'
-import { Notebook } from './Notebook'
+import { NotebookContent } from './Notebook'
 import { UserBasicData } from '../../../lib/networking/queries/useGetViewerQuery'
-import { ReadableItem } from '../../../lib/networking/queries/useGetLibraryItemsQuery'
-import { MarkdownNote } from '../../patterns/HighlightNotes'
+import { ReadableItem } from '../../../lib/networking/library_items/useLibraryItems'
 
 type NotebookModalProps = {
   viewer: UserBasicData
 
   item: ReadableItem
-  highlights: Highlight[]
 
   viewHighlightInReader: (arg: string) => void
-  onClose: (highlights: Highlight[], deletedAnnotations: Highlight[]) => void
-}
-
-export const getHighlightLocation = (patch: string): number | undefined => {
-  const dmp = new diff_match_patch()
-  const patches = dmp.patch_fromText(patch)
-  return patches[0].start1 || undefined
+  onClose: (highlights: Highlight[], deletedHighlights: Highlight[]) => void
 }
 
 export function NotebookModal(props: NotebookModalProps): JSX.Element {
-  const [sizeMode, setSizeMode] = useState<'normal' | 'maximized'>('normal')
   const [showConfirmDeleteNote, setShowConfirmDeleteNote] = useState(false)
   const [allAnnotations, setAllAnnotations] = useState<Highlight[] | undefined>(
     undefined
   )
-  const [deletedAnnotations, setDeletedAnnotations] = useState<
+
+  const [deletedHighlights, setDeletedAnnotations] = useState<
     Highlight[] | undefined
   >(undefined)
 
   const handleClose = useCallback(() => {
-    props.onClose(allAnnotations ?? [], deletedAnnotations ?? [])
-  }, [allAnnotations, deletedAnnotations])
+    props.onClose(allAnnotations ?? [], deletedHighlights ?? [])
+  }, [props, allAnnotations, deletedHighlights])
 
-  const handleAnnotationsChange = useCallback(
-    (allAnnotations, deletedAnnotations) => {
-      setAllAnnotations(allAnnotations)
-      setDeletedAnnotations(deletedAnnotations)
-    },
-    []
-  )
+  const handleAnnotationsChange = useCallback((allAnnotations: Highlight[]) => {
+    setAllAnnotations(allAnnotations)
+  }, [])
 
   const exportHighlights = useCallback(() => {
     ;(async () => {
@@ -72,7 +59,7 @@ export function NotebookModal(props: NotebookModalProps): JSX.Element {
   }, [allAnnotations])
 
   const viewInReader = useCallback(
-    (highlightId) => {
+    (highlightId: string) => {
       props.viewHighlightInReader(highlightId)
       handleClose()
     },
@@ -83,14 +70,17 @@ export function NotebookModal(props: NotebookModalProps): JSX.Element {
     <ModalRoot defaultOpen onOpenChange={handleClose}>
       <ModalOverlay />
       <ModalContent
+        tabIndex={-1}
         onInteractOutside={(event) => {
           event.preventDefault()
         }}
         css={{
           overflow: 'auto',
-          height: sizeMode === 'normal' ? 'unset' : '100%',
-          maxWidth: sizeMode === 'normal' ? '640px' : '100%',
-          minHeight: sizeMode === 'normal' ? '525px' : 'unset',
+          bg: '$thLibraryBackground',
+          width: '100%',
+          height: 'unset',
+          maxWidth: '748px',
+          minHeight: '525px',
           '@mdDown': {
             top: '20px',
             width: '100%',
@@ -99,9 +89,18 @@ export function NotebookModal(props: NotebookModalProps): JSX.Element {
             transform: 'translate(-50%)',
           },
         }}
+        onKeyUp={(event) => {
+          switch (event.key) {
+            case 'Escape':
+              handleClose()
+              event.preventDefault()
+              event.stopPropagation()
+              break
+          }
+        }}
       >
         <HStack
-          distribution="between"
+          distribution="center"
           alignment="center"
           css={{
             width: '100%',
@@ -126,27 +125,25 @@ export function NotebookModal(props: NotebookModalProps): JSX.Element {
             distribution="center"
             alignment="center"
           >
-            <SizeToggle mode={sizeMode} setMode={setSizeMode} />
             <Dropdown triggerElement={<MenuTrigger />}>
               <DropdownOption
                 onSelect={() => {
                   exportHighlights()
                 }}
-                title="Export Notebook"
+                title="Export notebook"
               />
               <DropdownOption
                 onSelect={() => {
                   setShowConfirmDeleteNote(true)
                 }}
-                title="Delete Article Note"
+                title="Delete article note"
               />
             </Dropdown>
             <CloseButton close={handleClose} />
           </HStack>
         </HStack>
-        <Notebook
+        <NotebookContent
           {...props}
-          sizeMode={sizeMode}
           viewInReader={viewInReader}
           onAnnotationsChanged={handleAnnotationsChange}
           showConfirmDeleteNote={showConfirmDeleteNote}
@@ -155,11 +152,6 @@ export function NotebookModal(props: NotebookModalProps): JSX.Element {
       </ModalContent>
     </ModalRoot>
   )
-}
-
-type SizeToggleProps = {
-  mode: 'normal' | 'maximized'
-  setMode: (mode: 'normal' | 'maximized') => void
 }
 
 function CloseButton(props: { close: () => void }): JSX.Element {
@@ -185,36 +177,6 @@ function CloseButton(props: { close: () => void }): JSX.Element {
         height={17}
         color={theme.colors.thTextContrast2.toString()}
       />
-    </Button>
-  )
-}
-
-function SizeToggle(props: SizeToggleProps): JSX.Element {
-  return (
-    <Button
-      style="plainIcon"
-      css={{
-        display: 'flex',
-        padding: '2px',
-        alignItems: 'center',
-        borderRadius: '9999px',
-        '&:hover': {
-          bg: '#898989',
-        },
-        '@mdDown': {
-          display: 'none',
-        },
-      }}
-      onClick={(event) => {
-        props.setMode(props.mode == 'normal' ? 'maximized' : 'normal')
-        event.preventDefault()
-      }}
-    >
-      {props.mode == 'normal' ? (
-        <ArrowsOut size="15" color={theme.colors.thTextContrast2.toString()} />
-      ) : (
-        <ArrowsIn size="15" color={theme.colors.thTextContrast2.toString()} />
-      )}
     </Button>
   )
 }

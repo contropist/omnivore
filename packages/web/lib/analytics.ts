@@ -1,10 +1,13 @@
 import { UserBasicData } from './networking/queries/useGetViewerQuery'
 import { intercomAppID } from './appConfig'
 
-const userInfo = (user: UserBasicData): { user_id: string; name: string } => {
+const userInfo = (
+  user: UserBasicData
+): { user_id: string; name: string; user_hash: string } => {
   return {
     user_id: user.id,
     name: user.name,
+    user_hash: user.intercomHash,
   }
 }
 
@@ -22,9 +25,12 @@ const initAnalytics = (user?: UserBasicData): void => {
 }
 
 export const setupAnalytics = (user?: UserBasicData): void => {
-  if (!intercomAppID) return
-  if (!window.Intercom) return
-  if (!window.ANALYTICS_INITIALIZED) initAnalytics(user)
+  if (!intercomAppID || !window.Intercom) {
+    return
+  }
+  if (!window.ANALYTICS_INITIALIZED) {
+    initAnalytics(user)
+  }
 
   if (user) {
     window.Intercom('update', userInfo(user))

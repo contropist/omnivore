@@ -1,3 +1,10 @@
+import * as jwt from 'jsonwebtoken'
+import {
+  RegistrationType,
+  StatusType,
+  User as UserEntity,
+} from '../../entity/user'
+import { env } from '../../env'
 import {
   DeleteAccountError,
   DeleteAccountErrorCode,
@@ -10,41 +17,42 @@ import {
   MutationDeleteAccountArgs,
   MutationGoogleLoginArgs,
   MutationGoogleSignupArgs,
+  MutationUpdateEmailArgs,
   MutationUpdateUserArgs,
   MutationUpdateUserProfileArgs,
   QueryUserArgs,
   QueryValidateUsernameArgs,
   ResolverFn,
   SignupErrorCode,
+  UpdateEmailError,
+  UpdateEmailErrorCode,
+  UpdateEmailSuccess,
   UpdateUserError,
   UpdateUserErrorCode,
   UpdateUserProfileError,
   UpdateUserProfileErrorCode,
   UpdateUserProfileSuccess,
   UpdateUserSuccess,
-  User,
   UserErrorCode,
   UserResult,
   UsersError,
   UsersSuccess,
 } from '../../generated/graphql'
-import { WithDataSourcesContext } from '../types'
-import { authorized, userDataToUser } from '../../utils/helpers'
-import { env } from '../../env'
-import { validateUsername } from '../../utils/usernamePolicy'
-import * as jwt from 'jsonwebtoken'
+import { userRepository } from '../../repository/user'
 import { createUser } from '../../services/create_user'
-import { deletePagesByParam } from '../../elastic/pages'
-import { setClaims } from '../../entity/utils'
-import { User as UserEntity } from '../../entity/user'
-import { AppDataSource } from '../../server'
+import { sendAccountChangeEmail } from '../../services/send_emails'
+import { cacheUser, getCachedUser, softDeleteUser } from '../../services/user'
+import { Merge } from '../../util'
+import { authorized } from '../../utils/gql-utils'
+import { validateUsername } from '../../utils/usernamePolicy'
+import { ResolverContext } from '../types'
 
 export const updateUserResolver = authorized<
-  UpdateUserSuccess,
+  Merge<UpdateUserSuccess, { user: UserEntity }>,
   UpdateUserError,
   MutationUpdateUserArgs
->(async (_, { input: { name, bio } }, { models, authTrx, claims }) => {
-  const user = await models.user.get(claims.uid)
+>(async (_, { input: { name, bio } }, { uid, authTrx }) => {
+  const user = await userRepository.findById(uid)
   if (!user) {
     return { errorCodes: [UpdateUserErrorCode.UserNotFound] }
   }
@@ -63,88 +71,87 @@ export const updateUserResolver = authorized<
     return { errorCodes }
   }
 
-  const updatedUser = await authTrx(async (tx) => {
-    const [updatedRecord, profile] = await Promise.all([
-      models.user.update(
-        claims.uid,
-        { name, source: user.source, sourceUserId: user.sourceUserId },
-        tx
-      ),
-      models.user.updateProfile(claims.uid, { bio }, tx),
-    ])
-    return { ...updatedRecord, profile }
-  })
+  const updatedUser = await authTrx((tx) =>
+    tx.getRepository(UserEntity).save({
+      ...user,
+      name,
+      profile: {
+        ...user.profile,
+        bio,
+      },
+    })
+  )
 
-  return { user: userDataToUser(updatedUser) }
+  await cacheUser(updatedUser)
+
+  return { user: updatedUser }
 })
 
 export const updateUserProfileResolver = authorized<
-  UpdateUserProfileSuccess,
+  Merge<UpdateUserProfileSuccess, { user: UserEntity }>,
   UpdateUserProfileError,
   MutationUpdateUserProfileArgs
->(
-  async (
-    _,
-    { input: { userId, username, pictureUrl } },
-    { models, authTrx, claims }
-  ) => {
-    const user = await models.user.get(userId)
-    if (user.id !== claims.uid) {
-      return {
-        errorCodes: [UpdateUserProfileErrorCode.Forbidden],
-      }
-    }
-
-    if (!(username || pictureUrl)) {
-      return {
-        errorCodes: [UpdateUserProfileErrorCode.BadData],
-      }
-    }
-
-    const lowerCasedUsername = username?.toLowerCase()
-    if (lowerCasedUsername) {
-      const existingUser = await models.user.getWhere({
-        username: lowerCasedUsername,
-      })
-      if (existingUser?.id) {
-        return {
-          errorCodes: [UpdateUserProfileErrorCode.UsernameExists],
-        }
-      }
-
-      if (!validateUsername(lowerCasedUsername)) {
-        return {
-          errorCodes: [UpdateUserProfileErrorCode.BadUsername],
-        }
-      }
-    }
-
-    const updatedProfile = await authTrx((tx) =>
-      models.user.updateProfile(
-        userId,
-        {
-          username: lowerCasedUsername,
-          picture_url: pictureUrl,
-        },
-        tx
-      )
-    )
-
-    user.profile = {
-      ...updatedProfile,
-      picture_url: updatedProfile.pictureUrl,
-    }
-
-    return { user: userDataToUser(user) }
+>(async (_, { input: { userId, username, pictureUrl } }, { uid, authTrx }) => {
+  const user = await userRepository.findById(userId)
+  if (!user) {
+    return { errorCodes: [UpdateUserProfileErrorCode.Unauthorized] }
   }
-)
+
+  if (user.id !== uid) {
+    return {
+      errorCodes: [UpdateUserProfileErrorCode.Forbidden],
+    }
+  }
+
+  if (!(username || pictureUrl)) {
+    return {
+      errorCodes: [UpdateUserProfileErrorCode.BadData],
+    }
+  }
+
+  const lowerCasedUsername = username?.toLowerCase()
+  if (lowerCasedUsername) {
+    const existingUser = await userRepository.findOneBy({
+      profile: {
+        username: lowerCasedUsername,
+      },
+      status: StatusType.Active,
+    })
+    if (existingUser?.id) {
+      return {
+        errorCodes: [UpdateUserProfileErrorCode.UsernameExists],
+      }
+    }
+
+    if (!validateUsername(lowerCasedUsername)) {
+      return {
+        errorCodes: [UpdateUserProfileErrorCode.BadUsername],
+      }
+    }
+  }
+
+  const updatedUser = await authTrx((tx) =>
+    tx.getRepository(UserEntity).save({
+      ...user,
+      profile: {
+        ...user.profile,
+        username: lowerCasedUsername,
+        pictureUrl,
+      },
+    })
+  )
+
+  await cacheUser(updatedUser)
+
+  return { user: updatedUser }
+})
 
 export const googleLoginResolver: ResolverFn<
-  LoginResult,
+  Merge<LoginResult, { me?: UserEntity }>,
   unknown,
-  WithDataSourcesContext,
+  ResolverContext,
   MutationGoogleLoginArgs
-> = async (_obj, { input }, { models, setAuth }) => {
+> = async (_obj, { input }, { setAuth }) => {
   const { email, secret } = input
 
   try {
@@ -153,8 +160,9 @@ export const googleLoginResolver: ResolverFn<
     return { errorCodes: [LoginErrorCode.AuthFailed] }
   }
 
-  const user = await models.user.getWhere({
+  const user = await userRepository.findOneBy({
     email,
+    status: StatusType.Active,
   })
   if (!user?.id) {
     return { errorCodes: [LoginErrorCode.UserNotFound] }
@@ -162,29 +170,34 @@ export const googleLoginResolver: ResolverFn<
 
   // set auth cookie in response header
   await setAuth({ uid: user.id })
-  return { me: userDataToUser(user) }
+  return { me: user }
 }
 
 export const validateUsernameResolver: ResolverFn<
   boolean,
   Record<string, unknown>,
-  WithDataSourcesContext,
+  ResolverContext,
   QueryValidateUsernameArgs
-> = async (_obj, { username }, { models }) => {
+> = async (_obj, { username }) => {
   const lowerCasedUsername = username.toLowerCase()
   if (!validateUsername(lowerCasedUsername)) {
     return false
   }
 
-  return !(await models.user.exists({ username: lowerCasedUsername }))
+  const user = await userRepository.findOneBy({
+    profile: {
+      username: lowerCasedUsername,
+    },
+  })
+  return !user
 }
 
 export const googleSignupResolver: ResolverFn<
-  GoogleSignupResult,
+  Merge<GoogleSignupResult, { me?: UserEntity }>,
   Record<string, unknown>,
-  WithDataSourcesContext,
+  ResolverContext,
   MutationGoogleSignupArgs
-> = async (_obj, { input }, { setAuth }) => {
+> = async (_obj, { input }, { setAuth, log }) => {
   const { email, username, name, bio, sourceUserId, pictureUrl, secret } = input
   const lowerCasedUsername = username.toLowerCase()
 
@@ -195,7 +208,7 @@ export const googleSignupResolver: ResolverFn<
   }
 
   try {
-    const [user, profile] = await createUser({
+    const [user] = await createUser({
       email,
       sourceUserId,
       provider: 'GOOGLE',
@@ -208,10 +221,10 @@ export const googleSignupResolver: ResolverFn<
 
     await setAuth({ uid: user.id })
     return {
-      me: userDataToUser({ ...user, profile: { ...profile, private: false } }),
+      me: user,
     }
   } catch (err) {
-    console.log('error signing up with google', err)
+    log.info('error signing up with google', err)
     if (isErrorWithCode(err)) {
       return { errorCodes: [err.errorCode as SignupErrorCode] }
     }
@@ -222,65 +235,87 @@ export const googleSignupResolver: ResolverFn<
 export const logOutResolver: ResolverFn<
   LogOutResult,
   unknown,
-  WithDataSourcesContext,
+  ResolverContext,
   unknown
-> = (_, __, { clearAuth }) => {
+> = (_, __, { clearAuth, log }) => {
   try {
     clearAuth()
     return { message: 'User successfully logged out' }
   } catch (error) {
-    console.error(error)
+    log.error(error)
     return { errorCodes: [LogOutErrorCode.LogOutFailed] }
   }
 }
 
 export const getMeUserResolver: ResolverFn<
-  User | undefined,
+  UserEntity | undefined,
   unknown,
-  WithDataSourcesContext,
+  ResolverContext,
   unknown
-> = async (_obj, __, { models, claims }) => {
+> = async (_obj, __, { claims }) => {
   try {
-    return claims?.uid
-      ? userDataToUser(await models.user.get(claims.uid))
-      : undefined
+    if (!claims?.uid) {
+      return undefined
+    }
+
+    const userId = claims.uid
+    const cachedUser = await getCachedUser(userId)
+    if (cachedUser) {
+      return cachedUser
+    }
+
+    const user = await userRepository.findById(claims.uid)
+    if (!user) {
+      return undefined
+    }
+
+    await cacheUser(user)
+
+    return user
   } catch (error) {
     return undefined
   }
 }
 
 export const getUserResolver: ResolverFn<
-  UserResult,
+  Merge<UserResult, { user?: UserEntity }>,
   unknown,
-  WithDataSourcesContext,
+  ResolverContext,
   QueryUserArgs
-> = async (_obj, { userId: id, username }, { models, claims }) => {
+> = async (_obj, { userId: id, username }) => {
   if (!(id || username)) {
     return { errorCodes: [UserErrorCode.BadRequest] }
   }
 
   const userId =
-    id || (username && (await models.user.getWhere({ username }))?.id)
+    id ||
+    (username &&
+      (
+        await userRepository.findOneBy({
+          profile: { username },
+          status: StatusType.Active,
+        })
+      )?.id)
   if (!userId) {
     return { errorCodes: [UserErrorCode.UserNotFound] }
   }
 
-  const userRecord = await models.user.getUserDetails(claims?.uid, userId)
+  const userRecord = await userRepository.findById(userId)
   if (!userRecord) {
     return { errorCodes: [UserErrorCode.UserNotFound] }
   }
 
-  return { user: userDataToUser(userRecord) }
+  return { user: userRecord }
 }
 
-export const getAllUsersResolver = authorized<UsersSuccess, UsersError>(
-  async (_obj, _params, { models, claims, authTrx }) => {
-    const users =
-      (await authTrx((tx) => models.user.getTopUsers(claims.uid, tx))) || []
-    const result = { users: users.map((userData) => userDataToUser(userData)) }
-    return result
-  }
-)
+export const getAllUsersResolver = authorized<
+  Merge<UsersSuccess, { users: Array<UserEntity> }>,
+  UsersError
+>(async (_obj, _params) => {
+  const users = await userRepository.findTopUsers()
+  const result = { users }
+  return result
+})
 
 type ErrorWithCode = {
   errorCode: string
@@ -297,33 +332,9 @@ export const deleteAccountResolver = authorized<
   DeleteAccountSuccess,
   DeleteAccountError,
   MutationDeleteAccountArgs
->(async (_, { userID }, { models, claims, log, pubsub }) => {
-  const user = await models.user.get(userID)
-  if (!user) {
-    return {
-      errorCodes: [DeleteAccountErrorCode.UserNotFound],
-    }
-  }
-
-  if (user.id !== claims.uid) {
-    return {
-      errorCodes: [DeleteAccountErrorCode.Unauthorized],
-    }
-  }
-
-  log.info('Deleting a user account', {
-    userID,
-    labels: {
-      source: 'resolver',
-      resolver: 'deleteAccountResolver',
-      uid: claims.uid,
-    },
-  })
-
-  const result = await AppDataSource.transaction(async (t) => {
-    await setClaims(t, claims.uid)
-    return t.getRepository(UserEntity).delete(userID)
-  })
+>(async (_, { userID }, { log }) => {
+  // soft delete user and change email address for user to sign up again
+  const result = await softDeleteUser(userID)
   if (!result.affected) {
     log.error('Error deleting user account')
 
@@ -332,8 +343,54 @@ export const deleteAccountResolver = authorized<
     }
   }
 
-  // delete this user's pages in elastic
-  await deletePagesByParam({ userId: userID }, { uid: userID, pubsub })
-
   return { userID }
+})
+
+export const updateEmailResolver = authorized<
+  UpdateEmailSuccess,
+  UpdateEmailError,
+  MutationUpdateEmailArgs
+>(async (_, { input: { email } }, { authTrx, uid, log }) => {
+  try {
+    const user = await userRepository.findById(uid)
+
+    if (!user) {
+      return {
+        errorCodes: [UpdateEmailErrorCode.Unauthorized],
+      }
+    }
+
+    if (user.source === RegistrationType.Email) {
+      await authTrx(async (tx) =>
+        tx.withRepository(userRepository).update(user.id, {
+          email,
+        })
+      )
+
+      await cacheUser({
+        ...user,
+        email,
+      })
+
+      return { email }
+    }
+
+    const result = await sendAccountChangeEmail({
+      id: user.id,
+      name: user.name,
+      email,
+    })
+    if (!result) {
+      return {
+        errorCodes: [UpdateEmailErrorCode.BadRequest],
+      }
+    }
+
+    return { email, verificationEmailSent: true }
+  } catch (error) {
+    log.error('Error updating email', error)
+    return {
+      errorCodes: [UpdateEmailErrorCode.BadRequest],
+    }
+  }
 })

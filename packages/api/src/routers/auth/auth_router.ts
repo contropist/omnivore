@@ -7,52 +7,49 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/require-await */
 /* eslint-disable @typescript-eslint/explicit-module-boundary-types */
+import axios from 'axios'
+import cors from 'cors'
+import type { Request, Response } from 'express'
+import express from 'express'
+import * as jwt from 'jsonwebtoken'
+import url from 'url'
+import { promisify } from 'util'
+import { appDataSource } from '../../data_source'
+import { RegistrationType, StatusType, User } from '../../entity/user'
+import { env } from '../../env'
+import { LoginErrorCode, SignupErrorCode } from '../../generated/graphql'
+import { getRepository, setClaims } from '../../repository'
+import { userRepository } from '../../repository/user'
+import { isErrorWithCode } from '../../resolvers'
+import { createUser } from '../../services/create_user'
+import {
+  sendNewAccountVerificationEmail,
+  sendPasswordResetEmail,
+} from '../../services/send_emails'
+import { analytics } from '../../utils/analytics'
+import {
+  comparePassword,
+  generateVerificationToken,
+  hashPassword,
+  setAuthInCookie,
+  verifyToken,
+} from '../../utils/auth'
+import { corsConfig } from '../../utils/corsConfig'
+import { logger } from '../../utils/logger'
+import { ARCHIVE_ACCOUNT_PATH, DEFAULT_HOME_PATH } from '../../utils/navigation'
+import { hourlyLimiter } from '../../utils/rate_limit'
+import { verifyChallengeRecaptcha } from '../../utils/recaptcha'
+import { createSsoToken, ssoRedirectURL } from '../../utils/sso'
+import { handleAppleWebAuth } from './apple_auth'
+import type { AuthProvider } from './auth_types'
 import {
   generateGoogleLoginURL,
   googleAuth,
   handleGoogleWebAuth,
   validateGoogleUser,
 } from './google_auth'
-
-import type { Request, Response } from 'express'
-import express from 'express'
-import axios from 'axios'
-import { env } from '../../env'
-import url from 'url'
-import { kx } from '../../datalayer/knex_config'
-import UserModel from '../../datalayer/user'
-import { buildLogger } from '../../utils/logger'
-import { promisify } from 'util'
-import * as jwt from 'jsonwebtoken'
-import { LoginErrorCode, SignupErrorCode } from '../../generated/graphql'
-import { handleAppleWebAuth } from './apple_auth'
-import type { AuthProvider } from './auth_types'
-import { createMobileAccountCreationResponse } from './mobile/account_creation'
-import { corsConfig } from '../../utils/corsConfig'
-import cors from 'cors'
-
-import {
-  RegistrationType,
-  StatusType,
-  UserData,
-} from '../../datalayer/user/model'
-import {
-  comparePassword,
-  getClaimsByToken,
-  hashPassword,
-  setAuthInCookie,
-} from '../../utils/auth'
-import { createUser, getUserByEmail } from '../../services/create_user'
-import { isErrorWithCode } from '../../resolvers'
-import { AppDataSource } from '../../server'
-import { getRepository, setClaims } from '../../entity/utils'
-import { User } from '../../entity/user'
-import {
-  sendConfirmationEmail,
-  sendPasswordResetEmail,
-} from '../../services/send_emails'
 import { createWebAuthToken } from './jwt_helpers'
-import { createSsoToken, ssoRedirectURL } from '../../utils/sso'
+import { createMobileAccountCreationResponse } from './mobile/account_creation'
 
 export interface SignupRequest {
   email: string
@@ -61,9 +58,9 @@ export interface SignupRequest {
   username: string
   bio?: string
   pictureUrl?: string
+  recaptchaToken?: string
 }
 
-const logger = buildLogger('app.dispatch')
 const signToken = promisify(jwt.sign)
 
 const cookieParams = {
@@ -71,20 +68,28 @@ const cookieParams = {
   maxAge: 365 * 24 * 60 * 60 * 1000,
 }
 
+const isURLPresent = (input: string): boolean => {
+  const urlRegex = /(https?:\/\/[^\s]+)/g
+  return urlRegex.test(input)
+}
+
 export const isValidSignupRequest = (obj: any): obj is SignupRequest => {
   return (
     'email' in obj &&
     obj.email.trim().length > 0 &&
     obj.email.trim().length < 512 && // email must not be empty
+    !isURLPresent(obj.email) &&
     'password' in obj &&
     obj.password.length >= 8 &&
     obj.password.trim().length < 512 && // password must be at least 8 characters
     'name' in obj &&
     obj.name.trim().length > 0 &&
     obj.name.trim().length < 512 && // name must not be empty
+    !isURLPresent(obj.name) &&
     'username' in obj &&
     obj.username.trim().length > 0 &&
-    obj.username.trim().length < 512 // username must not be empty
+    obj.username.trim().length < 512 && // username must not be empty
+    !isURLPresent(obj.username)
   )
 }
 
@@ -116,6 +121,7 @@ export function authRouter() {
   )
   router.post(
     '/create-account',
+    hourlyLimiter,
     cors<express.Request>(corsConfig),
     async (req, res) => {
       const { name, bio, username } = req.body
@@ -249,8 +255,7 @@ export function authRouter() {
       return { errorCodes: [SignupErrorCode.GoogleAuthError] }
     }
 
-    const model = new UserModel(kx)
-    const user = await model.getWhere({ email: userData.email })
+    const user = await userRepository.findOneBy({ email: userData.email })
 
     // eslint-disable-next @typescript-eslint/ban-ts-comment
     const secret = (await signToken(
@@ -326,6 +331,17 @@ export function authRouter() {
       )
     }
 
+    analytics.capture({
+      distinctId: user.id,
+      event: 'login',
+      properties: {
+        method: 'google',
+        email: user.email,
+        username: user.profile.username,
+        env: env.server.apiEnv,
+      },
+    })
+
     res.setHeader('set-cookie', result.headers['set-cookie'])
 
     await handleSuccessfulLogin(req, res, user, data.googleLogin.newUser)
@@ -334,7 +350,7 @@ export function authRouter() {
   async function handleSuccessfulLogin(
     req: express.Request,
     res: express.Response,
-    user: UserData | User,
+    user: User,
     newUser: boolean
   ): Promise<void> {
     try {
@@ -345,7 +361,7 @@ export function authRouter() {
           const state = JSON.parse((req.query?.state || '') as string)
           redirectUri = state?.redirect_uri
         } catch (err) {
-          console.warn(
+          logger.error(
             'handleSuccessfulLogin: failed to parse redirect query state param',
             err
           )
@@ -359,11 +375,15 @@ export function authRouter() {
             decodeURIComponent(redirectUri)
           )
         } else {
-          redirectUri = `${env.client.url}/home`
+          redirectUri = `${env.client.url}${DEFAULT_HOME_PATH}`
         }
       }
 
-      redirectUri = redirectUri ? redirectUri : `${env.client.url}/home`
+      if (user.status === StatusType.Archived) {
+        redirectUri = `${env.client.url}${ARCHIVE_ACCOUNT_PATH}`
+      }
+
+      redirectUri = redirectUri ?? `${env.client.url}${DEFAULT_HOME_PATH}`
 
       const message = res.get('Message')
       if (message) {
@@ -402,6 +422,7 @@ export function authRouter() {
       interface LoginRequest {
         email: string
         password: string
+        recaptchaToken?: string
       }
       function isValidLoginRequest(obj: any): obj is LoginRequest {
         return (
@@ -416,17 +437,29 @@ export function authRouter() {
           `${env.client.url}/auth/email-login?errorCodes=${LoginErrorCode.InvalidCredentials}`
         )
       }
-      const { email, password } = req.body
+
+      const { email, password, recaptchaToken } = req.body
+      if (process.env.RECAPTCHA_CHALLENGE_SECRET_KEY) {
+        const verified =
+          recaptchaToken && (await verifyChallengeRecaptcha(recaptchaToken))
+        if (!verified) {
+          logger.info('recaptcha failed', { recaptchaToken, verified })
+          return res.redirect(
+            `${env.client.url}/auth/email-login?errorCodes=UNKNOWN`
+          )
+        }
+      }
+
       try {
-        const user = await getUserByEmail(email.trim())
-        if (!user?.id) {
+        const user = await userRepository.findByEmail(email.trim())
+        if (!user || user.status === StatusType.Deleted) {
           return res.redirect(
             `${env.client.url}/auth/email-login?errorCodes=${LoginErrorCode.UserNotFound}`
           )
         }
 
         if (user.status === StatusType.Pending && user.email) {
-          await sendConfirmationEmail({
+          await sendNewAccountVerificationEmail({
             id: user.id,
             email: user.email,
             name: user.name,
@@ -450,6 +483,17 @@ export function authRouter() {
           )
         }
 
+        analytics.capture({
+          distinctId: user.id,
+          event: 'login',
+          properties: {
+            method: 'email',
+            email: user.email,
+            username: user.profile.username,
+            env: env.server.apiEnv,
+          },
+        })
+
         await handleSuccessfulLogin(req, res, user, false)
       } catch (e) {
         logger.info('email-login exception:', e)
@@ -467,6 +511,7 @@ export function authRouter() {
 
   router.post(
     '/email-signup',
+    hourlyLimiter,
     cors<express.Request>(corsConfig),
     async (req: express.Request, res: express.Response) => {
       if (!isValidSignupRequest(req.body)) {
@@ -474,13 +519,33 @@ export function authRouter() {
           `${env.client.url}/auth/email-signup?errorCodes=INVALID_CREDENTIALS`
         )
       }
-      const { email, password, name, username, bio, pictureUrl } = req.body
+      const {
+        email,
+        password,
+        name,
+        username,
+        bio,
+        pictureUrl,
+        recaptchaToken,
+      } = req.body
+
+      if (process.env.RECAPTCHA_CHALLENGE_SECRET_KEY) {
+        const verified =
+          recaptchaToken && (await verifyChallengeRecaptcha(recaptchaToken))
+        if (!verified) {
+          logger.info('recaptcha failed', { recaptchaToken, verified })
+          return res.redirect(
+            `${env.client.url}/auth/email-signup?errorCodes=UNKNOWN`
+          )
+        }
+      }
+
       // trim whitespace in email address
       const trimmedEmail = email.trim()
       try {
         // hash password
         const hashedPassword = await hashPassword(password)
-        await createUser({
+        const [user] = await createUser({
           email: trimmedEmail,
           provider: 'EMAIL',
           sourceUserId: trimmedEmail,
@@ -489,12 +554,17 @@ export function authRouter() {
           pictureUrl,
           bio,
           password: hashedPassword,
-          pendingConfirmation: true,
+          pendingConfirmation: !env.dev.autoVerify,
         })
 
-        res.redirect(
-          `${env.client.url}/auth/verify-email?message=SIGNUP_SUCCESS`
-        )
+        if (env.dev.autoVerify) {
+          const token = await generateVerificationToken({ id: user.id })
+          res.redirect(`${env.client.url}/auth/confirm-email/${token}`)
+        } else {
+          res.redirect(
+            `${env.client.url}/auth/verify-email?message=SIGNUP_SUCCESS`
+          )
+        }
       } catch (e) {
         logger.info('email-signup exception:', e)
         if (isErrorWithCode(e)) {
@@ -520,13 +590,7 @@ export function authRouter() {
 
       try {
         // verify token
-        const claims = await getClaimsByToken(token)
-        if (!claims) {
-          return res.redirect(
-            `${env.client.url}/auth/confirm-email?errorCodes=INVALID_TOKEN`
-          )
-        }
-
+        const claims = await verifyToken(token)
         const user = await getRepository(User).findOneBy({ id: claims.uid })
         if (!user) {
           return res.redirect(
@@ -535,7 +599,7 @@ export function authRouter() {
         }
 
         if (user.status === StatusType.Pending) {
-          const updated = await AppDataSource.transaction(
+          const updated = await appDataSource.transaction(
             async (entityManager) => {
               await setClaims(entityManager, user.id)
               return entityManager
@@ -550,6 +614,17 @@ export function authRouter() {
             )
           }
         }
+
+        analytics.capture({
+          distinctId: user.id,
+          event: 'login',
+          properties: {
+            method: 'email_verification',
+            email: user.email,
+            username: user.profile.username,
+            env: env.server.apiEnv,
+          },
+        })
 
         res.set('Message', 'EMAIL_CONFIRMED')
         await handleSuccessfulLogin(req, res, user, false)
@@ -575,6 +650,7 @@ export function authRouter() {
 
   router.post(
     '/forgot-password',
+    hourlyLimiter,
     cors<express.Request>(corsConfig),
     async (req: express.Request, res: express.Response) => {
       const email = req.body.email?.trim() as string // trim whitespace
@@ -584,9 +660,20 @@ export function authRouter() {
         )
       }
 
+      const captchaToken = req.body.recaptchaToken as string
+      if (process.env.RECAPTCHA_CHALLENGE_SECRET_KEY) {
+        const verified = await verifyChallengeRecaptcha(captchaToken)
+        if (!verified) {
+          logger.info('recaptcha failed', { captchaToken, verified })
+          return res.redirect(
+            `${env.client.url}/auth/forgot-password?errorCodes=UNKNOWN`
+          )
+        }
+      }
+
       try {
-        const user = await getUserByEmail(email)
-        if (!user) {
+        const user = await userRepository.findByEmail(email)
+        if (!user || user.status === StatusType.Deleted) {
           return res.redirect(`${env.client.url}/auth/reset-sent`)
         }
 
@@ -625,21 +712,17 @@ export function authRouter() {
       const { token, password } = req.body
 
       try {
-        // verify token
-        const claims = await getClaimsByToken(token)
-        if (!claims) {
-          return res.redirect(
-            `${env.client.url}/auth/reset-password/${token}?errorCodes=INVALID_TOKEN`
-          )
-        }
-
         if (!password || password.length < 8) {
           return res.redirect(
             `${env.client.url}/auth/reset-password/${token}?errorCodes=INVALID_PASSWORD`
           )
         }
 
-        const user = await getRepository(User).findOneBy({ id: claims.uid })
+        // verify token
+        const claims = await verifyToken(token)
+        const user = await getRepository(User).findOneBy({
+          id: claims.uid,
+        })
         if (!user) {
           return res.redirect(
             `${env.client.url}/auth/reset-password/${token}?errorCodes=USER_NOT_FOUND`
@@ -653,12 +736,14 @@ export function authRouter() {
         }
 
         const hashedPassword = await hashPassword(password)
-        const updated = await AppDataSource.transaction(
+        const updated = await appDataSource.transaction(
           async (entityManager) => {
             await setClaims(entityManager, user.id)
-            return entityManager
-              .getRepository(User)
-              .update({ id: user.id }, { password: hashedPassword })
+            return entityManager.getRepository(User).update(user.id, {
+              password: hashedPassword,
+              email: claims.email ?? undefined, // update email address if it was provided
+              source: RegistrationType.Email, // reset password will always be email
+            })
           }
         )
         if (!updated.affected) {
@@ -666,6 +751,17 @@ export function authRouter() {
             `${env.client.url}/auth/reset-password/${token}?errorCodes=UNKNOWN`
           )
         }
+
+        analytics.capture({
+          distinctId: user.id,
+          event: 'login',
+          properties: {
+            method: 'password_reset',
+            email: user.email,
+            username: user.profile.username,
+            env: env.server.apiEnv,
+          },
+        })
 
         await handleSuccessfulLogin(req, res, user, false)
       } catch (e) {

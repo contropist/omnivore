@@ -2,18 +2,24 @@ import CoreData
 import Models
 import Services
 import SwiftUI
-import Views
+import Utils
 
-@MainActor final class LabelsViewModel: ObservableObject {
+@MainActor public final class LabelsViewModel: ObservableObject {
+  let labelNameMaxLength = 64
+
   @Published var isLoading = false
-  @Published var selectedLabels = Set<LinkedItemLabel>()
+  @Published var selectedLabels = [LinkedItemLabel]()
   @Published var unselectedLabels = Set<LinkedItemLabel>()
   @Published var labels = [LinkedItemLabel]()
   @Published var showCreateLabelModal = false
-  @Published var labelSearchFilter = ""
+  @Published var labelSearchFilter = ZWSP
+
+  public init() {}
 
   func setLabels(_ labels: [LinkedItemLabel]) {
-    self.labels = labels.sorted { left, right in
+    let hideSystemLabels = PublicValet.hideLabels
+
+    self.labels = labels.filter { !hideSystemLabels || !isSystemLabel($0) }.sorted { left, right in
       let aTrimmed = left.unwrappedName.trimmingCharacters(in: .whitespaces)
       let bTrimmed = right.unwrappedName.trimmingCharacters(in: .whitespaces)
       return aTrimmed.caseInsensitiveCompare(bTrimmed) == .orderedAscending
@@ -22,17 +28,18 @@ import Views
 
   func loadLabels(
     dataService: DataService,
-    item: LinkedItem? = nil,
+    item: Models.LibraryItem? = nil,
     highlight: Highlight? = nil,
     initiallySelectedLabels: [LinkedItemLabel]? = nil
   ) async {
-    isLoading = true
     let selLabels = initiallySelectedLabels ?? item?.sortedLabels ?? highlight?.sortedLabels ?? []
 
     await loadLabelsFromStore(dataService: dataService)
     for label in labels {
       if selLabels.contains(label) {
-        selectedLabels.insert(label)
+        if !selectedLabels.contains(label) {
+          selectedLabels.append(label)
+        }
       } else {
         unselectedLabels.insert(label)
       }
@@ -46,7 +53,9 @@ import Views
           }
           for label in self.labels {
             if selLabels.contains(label) {
-              self.selectedLabels.insert(label)
+              if !self.selectedLabels.contains(label) {
+                self.selectedLabels.append(label)
+              }
             } else {
               self.unselectedLabels.insert(label)
             }
@@ -54,8 +63,6 @@ import Views
         }
       }
     }
-
-    isLoading = false
   }
 
   func loadLabelsFromStore(dataService: DataService) async {
@@ -84,8 +91,9 @@ import Views
   func createLabel(dataService: DataService, name: String, color: Color, description: String?) {
     isLoading = true
 
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let labelObjectID = try? dataService.createLabel(
-      name: name,
+      name: trimmedName,
       color: color.hex ?? "",
       description: description
     ) else {
@@ -95,7 +103,7 @@ import Views
 
     if let label = dataService.viewContext.object(with: labelObjectID) as? LinkedItemLabel {
       labels.insert(label, at: 0)
-      selectedLabels.insert(label)
+      selectedLabels.append(label)
     }
 
     isLoading = false
@@ -108,7 +116,7 @@ import Views
   }
 
   func saveItemLabelChanges(itemID: String, dataService: DataService) {
-    dataService.updateItemLabels(itemID: itemID, labelIDs: selectedLabels.map(\.unwrappedID))
+    dataService.setItemLabels(itemID: itemID, labels: InternalLinkedItemLabel.make(Set(selectedLabels) as NSSet))
   }
 
   func saveHighlightLabelChanges(highlightID: String, dataService: DataService) {

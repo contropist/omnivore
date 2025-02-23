@@ -1,10 +1,10 @@
-import { Integration } from '../../entity/integration'
-import { ArticleSavingRequestStatus, Page } from '../../elastic/types'
+import { LibraryItemState } from '../../entity/library_item'
+import { ItemEvent } from '../library_item'
 
 export interface RetrievedData {
   url: string
   labels?: string[]
-  state?: ArticleSavingRequestStatus
+  state?: LibraryItemState
 }
 export interface RetrievedResult {
   data: RetrievedData[]
@@ -19,19 +19,13 @@ export interface RetrieveRequest {
   offset?: number
 }
 
-export abstract class IntegrationService {
-  abstract name: string
+export interface IntegrationClient {
+  name: string
+  token: string
 
-  accessToken = async (token: string): Promise<string | null> => {
-    return Promise.resolve(null)
-  }
-  export = async (
-    integration: Integration,
-    pages: Page[]
-  ): Promise<boolean> => {
-    return Promise.resolve(false)
-  }
-  retrieve = async (req: RetrieveRequest): Promise<RetrievedResult> => {
-    return Promise.resolve({ data: [] })
-  }
+  accessToken(): Promise<string | null>
+
+  auth(state: string): Promise<string>
+
+  export(items: ItemEvent[]): Promise<boolean>
 }

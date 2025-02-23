@@ -10,6 +10,8 @@ export interface Integration {
   enabled: boolean
   createdAt: Date
   updatedAt: Date
+  taskName?: string
+  settings?: any
 }
 
 export type IntegrationType = 'EXPORT' | 'IMPORT'
@@ -41,6 +43,8 @@ export function useGetIntegrationsQuery(): IntegrationsQueryResponse {
             enabled
             createdAt
             updatedAt
+            taskName
+            settings
           }
         }
         ... on IntegrationsError {
@@ -51,8 +55,6 @@ export function useGetIntegrationsQuery(): IntegrationsQueryResponse {
   `
 
   const { data, mutate, isValidating } = useSWR(query, publicGqlFetcher)
-  console.log('integrations data', data)
-
   try {
     if (data) {
       const result = data as IntegrationsQueryResponseData
